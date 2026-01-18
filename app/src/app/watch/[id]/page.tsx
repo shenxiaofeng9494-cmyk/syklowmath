@@ -8,8 +8,7 @@ import { VoiceInteraction } from "@/components/voice-interaction/VoiceInteractio
 import { ViewSwitcher } from "@/components/video-player/ViewSwitcher";
 import { ExcalidrawCanvas } from "@/components/whiteboard/ExcalidrawCanvas";
 import { getVideoById, SubtitleCue } from "@/data/videos";
-import type { DrawingData, ViewType, CodeDemoData, CodeExecutionResult } from "@/types/excalidraw";
-import { CodeDemo } from "@/components/code-demo";
+import type { DrawingData, ViewType } from "@/types/excalidraw";
 
 interface ClientVideo {
   id: string;
@@ -116,13 +115,9 @@ export default function WatchPage() {
     context: "",
   });
 
-  // 视图切换状态（视频/画板/代码）
+  // 视图切换状态（视频/画板）
   const [activeView, setActiveView] = useState<ViewType>("video");
   const [drawingData, setDrawingData] = useState<DrawingData | null>(null);
-  const [codeDemoData, setCodeDemoData] = useState<CodeDemoData | null>(null);
-
-  // 代码执行结果发送方法（从 VoiceInteraction 获取）
-  const sendCodeResultRef = useRef<((result: CodeExecutionResult) => void) | null>(null);
 
   // 字幕状态
   const [subtitles, setSubtitles] = useState<SubtitleCue[]>([]);
@@ -251,28 +246,6 @@ export default function WatchPage() {
     console.log("View switched to drawing");
   }, []);
 
-  // 显示 AI 代码演示
-  const handleShowCode = useCallback((data: CodeDemoData) => {
-    console.log("handleShowCode called with:", data);
-    setCodeDemoData(data);
-    setActiveView("code"); // 自动切换到代码视图
-    console.log("View switched to code");
-  }, []);
-
-  // 处理代码执行结果（用于双向通信）
-  const handleCodeExecutionResult = useCallback((result: CodeExecutionResult) => {
-    console.log("Code execution result:", result);
-    // 发送结果给 AI 进行点评
-    if (sendCodeResultRef.current) {
-      sendCodeResultRef.current(result);
-    }
-  }, []);
-
-  // 接收 VoiceInteraction 暴露的 sendCodeExecutionResult 方法
-  const handleCodeExecutionResultHandler = useCallback((handler: (result: CodeExecutionResult) => void) => {
-    sendCodeResultRef.current = handler;
-  }, []);
-
   // 视频加载中
   if (videoLoading) {
     return (
@@ -357,14 +330,13 @@ export default function WatchPage() {
 
         {/* Video/Drawing Area */}
         <div className="relative aspect-video bg-black rounded-lg overflow-hidden">
-          {/* View Switcher - 只要有画板或代码内容，或不在视频视图，就显示 */}
-          {(drawingData || codeDemoData || activeView !== "video") && (
+          {/* View Switcher - 只要有画板内容，或不在视频视图，就显示 */}
+          {(drawingData || activeView !== "video") && (
             <div className="absolute top-4 right-4 z-20">
               <ViewSwitcher
                 activeView={activeView}
                 onSwitch={setActiveView}
                 hasDrawing={!!drawingData}
-                hasCode={!!codeDemoData}
               />
             </div>
           )}
@@ -391,17 +363,6 @@ export default function WatchPage() {
               />
             </div>
           )}
-
-          {/* Code Demo */}
-          {activeView === "code" && codeDemoData && (
-            <div className="absolute inset-0">
-              <CodeDemo
-                data={codeDemoData}
-                onExecutionResult={handleCodeExecutionResult}
-                className="w-full h-full"
-              />
-            </div>
-          )}
         </div>
 
         {/* Voice Interaction Panel */}
@@ -419,8 +380,6 @@ export default function WatchPage() {
               onResumeVideo={handleResumeVideo}
               onJumpToTime={handleJumpToTime}
               onShowDrawing={handleShowDrawing}
-              onShowCode={handleShowCode}
-              onCodeExecutionResultHandler={handleCodeExecutionResultHandler}
             />
           </div>
         )}

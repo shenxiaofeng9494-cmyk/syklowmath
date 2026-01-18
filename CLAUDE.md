@@ -12,7 +12,6 @@ MathTalkTV is an interactive voice-enabled video learning platform for mathemati
 - **Language:** TypeScript (strict mode)
 - **UI:** React 19, Tailwind CSS 4, shadcn/ui (Radix UI)
 - **Math Rendering:** KaTeX for LaTeX formulas, Mafs for interactive function graphs, Excalidraw for geometry drawings
-- **Code Demo:** CodeMirror 6 for editing, Pyodide (WASM) for browser-side Python execution
 - **Animation:** Framer Motion
 - **AI Services:** OpenAI Realtime API (voice interaction), Whisper/Paraformer API (video transcription)
 - **Database:** Supabase (PostgreSQL with pgvector for RAG)
@@ -59,16 +58,13 @@ app/
 │   ├── components/
 │   │   ├── video-player/      # HTML5 video with subtitle sync, ViewSwitcher
 │   │   ├── voice-interaction/ # Chat UI + voice handling
-│   │   ├── whiteboard/        # LaTeX formulas, function graphs, geometry drawings
-│   │   └── code-demo/         # Python IDE with CodeMirror + Pyodide
+│   │   └── whiteboard/        # LaTeX formulas, function graphs, geometry drawings
 │   ├── hooks/
-│   │   ├── useRealtimeVoice.ts # WebSocket + audio processing (core voice logic)
-│   │   └── usePyodide.ts      # Browser-side Python execution via WASM
+│   │   └── useRealtimeVoice.ts # WebSocket + audio processing (core voice logic)
 │   ├── tool-guides/            # Tool usage guides (loaded on-demand)
 │   │   ├── loader.ts          # YAML frontmatter parsing, guide loading
 │   │   ├── whiteboard/GUIDE.md # formula/graph/drawing usage
-│   │   ├── drawing/GUIDE.md   # Geometry coordinate system details
-│   │   └── code-demo/GUIDE.md # Python demo examples
+│   │   └── drawing/GUIDE.md   # Geometry coordinate system details
 │   ├── types/
 │   │   └── excalidraw.ts      # TypeScript interfaces for drawing & code data
 │   ├── lib/
@@ -102,23 +98,21 @@ app/
 
 ### Critical Files
 
-- `useRealtimeVoice.ts`: Core voice interaction hook managing WebSocket, audio capture/playback, VAD, tool handling, and bidirectional code result communication
+- `useRealtimeVoice.ts`: Core voice interaction hook managing WebSocket, audio capture/playback, VAD, and tool handling
 - `/api/realtime/route.ts`: System prompt engineering - AI configured as friendly peer tutor ("学长/学姐"), requires whiteboard for all formulas
 - `Whiteboard.tsx`: KaTeX formula rendering and Mafs function graphing with step-by-step animation support
-- `CodeDemo.tsx`: Python IDE with CodeMirror editor, Pyodide execution, output panel, and variable inspector
-- `ViewSwitcher.tsx`: Switches between video, drawing (Excalidraw), and code (IDE) views
+- `ViewSwitcher.tsx`: Switches between video and drawing (Excalidraw) views
 
 ### AI Tool Calls
 
-The OpenAI Realtime API is configured with five tools that the AI can invoke:
+The OpenAI Realtime API is configured with four tools that the AI can invoke:
 - `use_whiteboard`: Displays math content on the whiteboard. Supports three types:
   - `formula`: LaTeX formulas rendered with KaTeX
   - `graph`: Function plots rendered with Mafs
   - `drawing`: Geometry drawings rendered with Excalidraw (auto-switches to drawing view)
-- `use_code_demo`: Shows Python code in IDE for numerical computation, algorithm demos. Supports numpy/sympy. User can edit/run code, results sent back to AI for feedback (auto-switches to code view)
 - `resume_video`: Resumes video playback when student indicates understanding (auto-switches back to video view)
 - `jump_to_video_node`: Jumps to a specific knowledge point in the video. Searches subtitles first (precise timestamps), falls back to node list
-- `load_tool_guide`: Loads detailed tool usage guides on-demand from `src/tool-guides/*/GUIDE.md`. Available guides: whiteboard, drawing, code-demo. System prompt is kept slim; detailed instructions loaded when needed
+- `load_tool_guide`: Loads detailed tool usage guides on-demand from `src/tool-guides/*/GUIDE.md`. Available guides: whiteboard, drawing. System prompt is kept slim; detailed instructions loaded when needed
 
 ### RAG Context Injection
 

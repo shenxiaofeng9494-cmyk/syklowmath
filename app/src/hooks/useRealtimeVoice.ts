@@ -318,22 +318,6 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions) {
                   wsRef.current.send(JSON.stringify({ type: "response.create" }));
                 }
               }
-            } else if (event.name === "use_code_demo") {
-              // use_code_demo 需要等待用户执行代码后再发送结果
-              // 传递 callId 给回调，让外部可以稍后发送结果
-              opts.onToolCall?.(event.name, args, event.call_id);
-              // 先发送一个初始确认，让 AI 继续说话
-              if (wsRef.current?.readyState === WebSocket.OPEN && event.call_id) {
-                wsRef.current.send(JSON.stringify({
-                  type: "conversation.item.create",
-                  item: {
-                    type: "function_call_output",
-                    call_id: event.call_id,
-                    output: JSON.stringify({ success: true, message: "代码已展示，等待学生执行" }),
-                  },
-                }));
-                wsRef.current.send(JSON.stringify({ type: "response.create" }));
-              }
             } else if (event.name === "jump_to_video_node") {
               // 跳转到指定知识点（优先在字幕中精准搜索）
               const query = args.query as string;
@@ -740,52 +724,6 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions) {
     wsRef.current.send(JSON.stringify(responseEvent));
   }, []);
 
-  // 发送代码执行结果给 AI（用于双向通信）
-  const sendCodeExecutionResult = useCallback((result: {
-    success: boolean;
-    output: string;
-    error?: string;
-    variables?: Record<string, string>;
-  }) => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      console.error("WebSocket not connected");
-      return;
-    }
-
-    console.log("Sending code execution result to AI:", result);
-
-    // 创建用户消息描述执行结果
-    const resultMessage = result.success
-      ? `学生运行了代码，输出结果：\n${result.output}${result.variables && Object.keys(result.variables).length > 0
-          ? `\n\n变量值：\n${Object.entries(result.variables).map(([k, v]) => `${k} = ${v}`).join('\n')}`
-          : ''
-        }`
-      : `学生运行代码时出错：${result.error}`;
-
-    // 发送执行结果作为用户消息
-    wsRef.current.send(JSON.stringify({
-      type: "conversation.item.create",
-      item: {
-        type: "message",
-        role: "user",
-        content: [
-          {
-            type: "input_text",
-            text: resultMessage,
-          },
-        ],
-      },
-    }));
-
-    // 触发 AI 响应（点评执行结果）
-    wsRef.current.send(JSON.stringify({
-      type: "response.create",
-      response: {
-        modalities: ["text", "audio"],
-      },
-    }));
-  }, []);
-
   // 断开连接
   const disconnect = useCallback(() => {
     console.log("Disconnecting...");
@@ -827,7 +765,6 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions) {
     stopListening,
     disconnect,
     sendTextMessage,
-    sendCodeExecutionResult,
     startPushToTalk,
     stopPushToTalk,
     setIsPushToTalk,

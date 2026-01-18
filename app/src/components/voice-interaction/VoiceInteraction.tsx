@@ -6,7 +6,7 @@ import { QuickIntents } from "@/components/voice-interaction/QuickIntents";
 import { useRealtimeVoice } from "@/hooks/useRealtimeVoice";
 import katex from "katex";
 import "katex/dist/katex.min.css";
-import type { DrawingData, ExcalidrawElementSkeleton, CodeDemoData, CodeExecutionResult } from "@/types/excalidraw";
+import type { DrawingData, ExcalidrawElementSkeleton } from "@/types/excalidraw";
 
 interface SubtitleCue {
   start: number;
@@ -26,8 +26,6 @@ interface VoiceInteractionProps {
   onResumeVideo: () => void;
   onJumpToTime?: (time: number) => void;  // 跳转到指定时间
   onShowDrawing: (data: DrawingData) => void;
-  onShowCode?: (data: CodeDemoData) => void;
-  onCodeExecutionResultHandler?: (handler: (result: CodeExecutionResult) => void) => void;
 }
 
 type InteractionStatus = "connecting" | "error" | "need_permission" | "listening" | "user_speaking" | "thinking" | "speaking";
@@ -119,8 +117,6 @@ export function VoiceInteraction({
   onResumeVideo,
   onJumpToTime,
   onShowDrawing,
-  onShowCode,
-  onCodeExecutionResultHandler,
 }: VoiceInteractionProps) {
   const [status, setStatus] = useState<InteractionStatus>("connecting");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -151,7 +147,6 @@ export function VoiceInteraction({
     stopListening,
     disconnect,
     sendTextMessage,
-    sendCodeExecutionResult,
   } = useRealtimeVoice({
     videoContext,
     videoId,
@@ -290,20 +285,6 @@ export function VoiceInteraction({
             } : undefined,
           });
         }
-      } else if (tool === "use_code_demo") {
-        // 触发代码演示，自动切换到代码视图
-        const p = params as {
-          code: string;
-          title?: string;
-          explanation?: string;
-        };
-        console.log("Code demo tool call detected:", p);
-        onShowCode?.({
-          code: p.code,
-          title: p.title,
-          explanation: p.explanation,
-          language: "python",
-        });
       }
     },
     onResumeVideo: () => {
@@ -398,13 +379,6 @@ export function VoiceInteraction({
       disconnect();
     };
   }, [stopListening, disconnect]);
-
-  // 暴露 sendCodeExecutionResult 给父组件
-  useEffect(() => {
-    if (onCodeExecutionResultHandler && sendCodeExecutionResult) {
-      onCodeExecutionResultHandler(sendCodeExecutionResult);
-    }
-  }, [onCodeExecutionResultHandler, sendCodeExecutionResult]);
 
   // 请求麦克风权限并开始监听
   const handleStartListening = async () => {

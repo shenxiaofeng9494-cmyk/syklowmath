@@ -7,10 +7,9 @@ interface ViewSwitcherProps {
   activeView: ViewType;
   onSwitch: (view: ViewType) => void;
   hasDrawing: boolean;
-  hasCode?: boolean;
 }
 
-export function ViewSwitcher({ activeView, onSwitch, hasDrawing, hasCode }: ViewSwitcherProps) {
+export function ViewSwitcher({ activeView, onSwitch, hasDrawing }: ViewSwitcherProps) {
   return (
     <div className="flex items-center gap-1 bg-black/70 backdrop-blur-sm rounded-full p-1">
       {/* Video button */}
@@ -69,42 +68,6 @@ export function ViewSwitcher({ activeView, onSwitch, hasDrawing, hasCode }: View
               initial={{ scale: 0 }}
               animate={{ scale: 1 }}
               className="absolute -top-1 -right-1 w-3 h-3 bg-green-400 rounded-full border-2 border-black/70"
-            />
-          )}
-        </span>
-      </button>
-
-      {/* Code button */}
-      <button
-        onClick={() => hasCode && onSwitch("code")}
-        disabled={!hasCode}
-        className={`relative px-4 py-2 rounded-full text-sm font-medium transition-all ${
-          activeView === "code"
-            ? "text-white"
-            : hasCode
-            ? "text-gray-300 hover:text-white"
-            : "text-gray-600 cursor-not-allowed"
-        }`}
-      >
-        {activeView === "code" && (
-          <motion.div
-            layoutId="viewSwitcherBg"
-            className="absolute inset-0 bg-purple-500 rounded-full"
-            initial={false}
-            transition={{ type: "spring", stiffness: 500, damping: 30 }}
-          />
-        )}
-        <span className="relative flex items-center gap-2">
-          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M9.4 16.6L4.8 12l4.6-4.6L8 6l-6 6 6 6 1.4-1.4zm5.2 0l4.6-4.6-4.6-4.6L16 6l6 6-6 6-1.4-1.4z" />
-          </svg>
-          代码
-          {/* New indicator when code is available but not viewing */}
-          {hasCode && activeView !== "code" && (
-            <motion.span
-              initial={{ scale: 0 }}
-              animate={{ scale: 1 }}
-              className="absolute -top-1 -right-1 w-3 h-3 bg-purple-400 rounded-full border-2 border-black/70"
             />
           )}
         </span>

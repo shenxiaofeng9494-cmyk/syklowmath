@@ -6,7 +6,6 @@
 
 - **语音交互** - 基于 OpenAI Realtime API，支持实时语音对话
 - **智能白板** - LaTeX 公式渲染、函数图像绘制、几何图形演示
-- **代码演示** - 浏览器端 Python 执行，支持 NumPy/SymPy
 - **知识点跳转** - RAG 检索支持，可跳转到视频任意知识点
 - **视频处理** - 自动转写字幕、智能切分知识点节点
 
@@ -15,7 +14,6 @@
 - **框架:** Next.js 16 (App Router) + TypeScript
 - **UI:** React 19, Tailwind CSS 4, shadcn/ui
 - **数学渲染:** KaTeX + Mafs + Excalidraw
-- **代码执行:** CodeMirror 6 + Pyodide (WASM)
 - **AI 服务:** OpenAI Realtime API, Whisper
 - **数据库:** Supabase (PostgreSQL + pgvector)
 - **存储:** 阿里云 OSS
@@ -94,11 +92,9 @@ app/
 │   ├── components/
 │   │   ├── video-player/      # 视频播放器
 │   │   ├── voice-interaction/ # 语音交互
-│   │   ├── whiteboard/        # 智能白板
-│   │   └── code-demo/         # 代码演示
+│   │   └── whiteboard/        # 智能白板
 │   ├── hooks/
-│   │   ├── useRealtimeVoice.ts # 语音交互核心逻辑
-│   │   └── usePyodide.ts      # Python 执行
+│   │   └── useRealtimeVoice.ts # 语音交互核心逻辑
 │   └── lib/                   # 工具函数
 ```
 
@@ -109,7 +105,6 @@ AI 助手具备以下工具：
 | 工具 | 功能 |
 |------|------|
 | `use_whiteboard` | 显示公式、函数图像、几何图形 |
-| `use_code_demo` | 展示 Python 代码并执行 |
 | `resume_video` | 恢复视频播放 |
 | `jump_to_video_node` | 跳转到指定知识点 |
 
