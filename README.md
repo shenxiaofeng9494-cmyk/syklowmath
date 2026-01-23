@@ -4,17 +4,21 @@
 
 ## 功能特点
 
-- **语音交互** - 基于 OpenAI Realtime API，支持实时语音对话
-- **智能白板** - LaTeX 公式渲染、函数图像绘制、几何图形演示
+- **语音交互** - 支持两种方案：OpenAI Realtime API 或 Doubao ASR + DeepSeek LLM + Doubao TTS
+- **智能白板** - LaTeX 公式渲染 (KaTeX)、函数图像绘制 (Mafs)
 - **知识点跳转** - RAG 检索支持，可跳转到视频任意知识点
-- **视频处理** - 自动转写字幕、智能切分知识点节点
+- **视频处理** - 自动转写字幕、智能切分知识点节点（支持 GPT-4o 语义分析或 Volcengine 视觉检测）
+- **AI 游戏生成** - 基于 Claude Agent SDK 自动生成数学练习游戏
 
 ## 技术栈
 
 - **框架:** Next.js 16 (App Router) + TypeScript
 - **UI:** React 19, Tailwind CSS 4, shadcn/ui
-- **数学渲染:** KaTeX + Mafs + Excalidraw
-- **AI 服务:** OpenAI Realtime API, Whisper
+- **数学渲染:** KaTeX (公式) + Mafs (函数图像)
+- **AI 服务:**
+  - 语音方案1: OpenAI Realtime API
+  - 语音方案2: Doubao ASR + DeepSeek LLM + Doubao TTS (推荐)
+  - 游戏生成: Claude Agent SDK
 - **数据库:** Supabase (PostgreSQL + pgvector)
 - **存储:** 阿里云 OSS
 
@@ -45,8 +49,15 @@ cp .env.local.example .env.local
 在 `app/.env.local` 中配置：
 
 ```env
-# 必需：OpenAI API Key（需要 Realtime API 权限）
+# 语音方案1：OpenAI Realtime API
 OPENAI_API_KEY=sk-...
+
+# 语音方案2：Doubao ASR + DeepSeek LLM + Doubao TTS (推荐)
+DEEPSEEK_API_KEY=sk-...
+DOUBAO_API_TOKEN=your-api-token
+
+# 游戏生成：Claude Agent SDK
+ANTHROPIC_API_KEY=sk-ant-...
 
 # 可选：Supabase（用于 RAG 向量检索）
 SUPABASE_URL=https://your-project.supabase.co
@@ -60,7 +71,13 @@ OSS_REGION=oss-cn-hangzhou
 OSS_BUCKET=your-bucket
 OSS_ACCESS_KEY_ID=your-key-id
 OSS_ACCESS_KEY_SECRET=your-key-secret
+
+# 可选：Volcengine（视觉场景分割）
+VOLCENGINE_ACCESS_KEY_ID=...
+VOLCENGINE_ACCESS_KEY_SECRET=...
 ```
+
+**最低要求:** OpenAI API Key 或 (DeepSeek API Key + Doubao Token) 二选一即可使用语音交互。
 
 ### 运行
 
@@ -88,14 +105,24 @@ app/
 │   │   ├── page.tsx           # 首页 - 视频列表
 │   │   ├── watch/[id]/        # 视频播放页
 │   │   ├── admin/             # 管理后台
+│   │   ├── teacher/           # 教师界面 - 游戏管理
 │   │   └── api/               # API 路由
+│   │       ├── realtime/      # OpenAI Realtime 会话
+│   │       ├── voice/         # 语音相关 (ASR/TTS/Chat)
+│   │       ├── video/         # 视频 CRUD 和处理
+│   │       └── game/          # 游戏生成
 │   ├── components/
 │   │   ├── video-player/      # 视频播放器
-│   │   ├── voice-interaction/ # 语音交互
-│   │   └── whiteboard/        # 智能白板
+│   │   ├── voice-interaction/ # 语音交互 UI
+│   │   ├── whiteboard/        # 智能白板
+│   │   ├── game-player/       # 游戏播放器
+│   │   └── game-preview/      # 游戏预览
 │   ├── hooks/
-│   │   └── useRealtimeVoice.ts # 语音交互核心逻辑
-│   └── lib/                   # 工具函数
+│   │   ├── useRealtimeVoice.ts # OpenAI Realtime 语音
+│   │   └── voice/             # Doubao+DeepSeek 语音管道
+│   └── lib/
+│       ├── game-generator/    # Claude 游戏生成
+│       └── ...                # 其他工具函数
 ```
 
 ## AI 工具能力
@@ -104,9 +131,10 @@ AI 助手具备以下工具：
 
 | 工具 | 功能 |
 |------|------|
-| `use_whiteboard` | 显示公式、函数图像、几何图形 |
+| `use_whiteboard` | 显示公式、函数图像 |
 | `resume_video` | 恢复视频播放 |
 | `jump_to_video_node` | 跳转到指定知识点 |
+| `load_tool_guide` | 加载工具使用指南 |
 
 ## 开发命令
 
