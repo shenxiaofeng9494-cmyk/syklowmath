@@ -7,8 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 MathTalkTV is an interactive voice-enabled video learning platform for mathematics education. Students can pause educational videos and ask AI questions in real-time using voice, with AI responding via speech and visual demonstrations on a whiteboard. Target audience is middle school students (12-15 years old) learning mathematics in Chinese.
 
 **Key Features:**
-- Real-time voice conversation with AI tutor using OpenAI Realtime API
-- Interactive whiteboard with LaTeX formulas, function graphs, and geometry drawings
+- Real-time voice conversation with AI tutor (OpenAI Realtime, Doubao Realtime S2S, or Doubao+DeepSeek pipeline)
+- Interactive whiteboard with LaTeX formulas and function graphs
 - Video node segmentation with RAG-powered search
 - AI-generated math games for practice
 
@@ -19,7 +19,7 @@ MathTalkTV is an interactive voice-enabled video learning platform for mathemati
 - **UI:** React 19, Tailwind CSS 4, shadcn/ui (Radix UI)
 - **Math Rendering:** KaTeX for LaTeX formulas, Mafs for interactive function graphs
 - **Animation:** Framer Motion
-- **AI Services:** OpenAI Realtime API (voice interaction), Whisper/Paraformer API (video transcription), Claude Agent SDK (game generation)
+- **AI Services:** OpenAI Realtime API, Doubao Realtime S2S, Doubao ASR/TTS + DeepSeek LLM (voice interaction), Whisper/Paraformer API (video transcription), Claude Agent SDK (game generation)
 - **Database:** Supabase (PostgreSQL with pgvector for RAG)
 - **Storage:** Aliyun OSS for video files
 - **Icons:** Lucide React
@@ -152,30 +152,37 @@ VOLCENGINE_ACCESS_KEY_ID=...
 VOLCENGINE_ACCESS_KEY_SECRET=...
 ```
 
-**Minimum requirement:** Either OpenAI API key OR (DeepSeek API key + Doubao token) for voice interaction.
+**Minimum requirement:** One of the following for voice interaction:
+- OpenAI API key (for OpenAI Realtime)
+- Doubao API token (for Doubao Realtime S2S)
+- Doubao API token + DeepSeek API key (for three-stage pipeline)
 
 ## Critical Files
 
 ### Voice Interaction
-**Legacy (OpenAI Realtime):**
+**Option 1: OpenAI Realtime (Legacy):**
 - **`useRealtimeVoice.ts`** - Core WebSocket + audio management
 - **`/api/realtime/route.ts`** - System prompt engineering, RAG context injection
 
-**New Three-Stage Pipeline (Doubao + DeepSeek):**
+**Option 2: Doubao Realtime S2S:**
+- **`src/hooks/voice/useDoubaoRealtimeVoice.ts`** - Doubao realtime voice integration
+- **`/api/voice/doubao-realtime/route.ts`** - Doubao realtime WebSocket proxy
+
+**Option 3: Three-Stage Pipeline (Doubao ASR + DeepSeek LLM + Doubao TTS):**
 - **`src/hooks/voice/useVoiceInteraction.ts`** - Main coordinator hook
 - **`src/hooks/voice/useDoubaoASR.ts`** - Doubao streaming ASR client
 - **`src/hooks/voice/useDeepSeekLLM.ts`** - DeepSeek LLM with function calling
 - **`src/hooks/voice/useDoubaoTTS.ts`** - Doubao bidirectional TTS client
-- **`src/hooks/voice/useDoubaoRealtimeVoice.ts`** - Doubao realtime voice integration
-- **`src/hooks/voice/useAudioCapture.ts`** - Microphone capture with resampling
-- **`src/hooks/voice/useAudioPlayback.ts`** - Audio playback queue
-- **`src/hooks/voice/doubao-protocol.ts`** - Doubao WebSocket protocol definitions
-- **`src/hooks/voice/types.ts`** - Voice system type definitions
 - **`/api/voice/session/route.ts`** - Session initialization with RAG context
 - **`/api/voice/chat/route.ts`** - DeepSeek streaming proxy
 - **`/api/voice/asr/route.ts`** - ASR endpoint
 - **`/api/voice/tts/route.ts`** - TTS endpoint
-- **`/api/voice/doubao-realtime/route.ts`** - Doubao realtime WebSocket proxy
+
+**Shared Voice Infrastructure:**
+- **`src/hooks/voice/useAudioCapture.ts`** - Microphone capture with resampling
+- **`src/hooks/voice/useAudioPlayback.ts`** - Audio playback queue
+- **`src/hooks/voice/doubao-protocol.ts`** - Doubao WebSocket protocol definitions
+- **`src/hooks/voice/types.ts`** - Voice system type definitions
 - **`/api/voice/tool-detect/route.ts`** - Tool detection endpoint
 
 **AI Tools configured:**

@@ -4,7 +4,7 @@
 
 ## 功能特点
 
-- **语音交互** - 支持两种方案：OpenAI Realtime API 或 Doubao ASR + DeepSeek LLM + Doubao TTS
+- **语音交互** - 支持三种方案：OpenAI Realtime API、Doubao Realtime S2S、或 Doubao ASR + DeepSeek LLM + Doubao TTS
 - **智能白板** - LaTeX 公式渲染 (KaTeX)、函数图像绘制 (Mafs)
 - **知识点跳转** - RAG 检索支持，可跳转到视频任意知识点
 - **视频处理** - 自动转写字幕、智能切分知识点节点（支持 GPT-4o 语义分析或 Volcengine 视觉检测）
@@ -17,7 +17,8 @@
 - **数学渲染:** KaTeX (公式) + Mafs (函数图像)
 - **AI 服务:**
   - 语音方案1: OpenAI Realtime API
-  - 语音方案2: Doubao ASR + DeepSeek LLM + Doubao TTS (推荐)
+  - 语音方案2: Doubao Realtime S2S (豆包实时语音)
+  - 语音方案3: Doubao ASR + DeepSeek LLM + Doubao TTS (三阶段管道)
   - 游戏生成: Claude Agent SDK
 - **数据库:** Supabase (PostgreSQL + pgvector)
 - **存储:** 阿里云 OSS
@@ -52,9 +53,10 @@ cp .env.local.example .env.local
 # 语音方案1：OpenAI Realtime API
 OPENAI_API_KEY=sk-...
 
-# 语音方案2：Doubao ASR + DeepSeek LLM + Doubao TTS (推荐)
-DEEPSEEK_API_KEY=sk-...
+# 语音方案2：Doubao Realtime S2S (豆包实时语音)
+# 语音方案3：Doubao ASR + DeepSeek LLM + Doubao TTS (三阶段管道)
 DOUBAO_API_TOKEN=your-api-token
+DEEPSEEK_API_KEY=sk-...  # 仅方案3需要
 
 # 游戏生成：Claude Agent SDK
 ANTHROPIC_API_KEY=sk-ant-...
@@ -77,7 +79,10 @@ VOLCENGINE_ACCESS_KEY_ID=...
 VOLCENGINE_ACCESS_KEY_SECRET=...
 ```
 
-**最低要求:** OpenAI API Key 或 (DeepSeek API Key + Doubao Token) 二选一即可使用语音交互。
+**最低要求:** 三种语音方案任选其一：
+- OpenAI API Key
+- Doubao API Token (豆包实时)
+- Doubao API Token + DeepSeek API Key (三阶段管道)
 
 ### 运行
 
@@ -119,7 +124,7 @@ app/
 │   │   └── game-preview/      # 游戏预览
 │   ├── hooks/
 │   │   ├── useRealtimeVoice.ts # OpenAI Realtime 语音
-│   │   └── voice/             # Doubao+DeepSeek 语音管道
+│   │   └── voice/             # Doubao 语音 (Realtime S2S + 三阶段管道)
 │   └── lib/
 │       ├── game-generator/    # Claude 游戏生成
 │       └── ...                # 其他工具函数
