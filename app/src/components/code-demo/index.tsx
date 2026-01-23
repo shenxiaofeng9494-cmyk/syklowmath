@@ -23,4 +23,4 @@ export const CodeDemo = dynamic(
 );
 
 // Re-export types
-export type { CodeDemoData, CodeExecutionResult } from "@/types/excalidraw";
+export type { CodeDemoData, CodeExecutionResult } from "@/types/code-demo";

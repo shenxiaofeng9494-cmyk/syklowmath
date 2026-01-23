@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import type { CodeExecutionResult } from "@/types/excalidraw";
+import type { CodeExecutionResult } from "@/types/code-demo";
 
 // Pyodide CDN URL
 const PYODIDE_CDN = "https://cdn.jsdelivr.net/pyodide/v0.24.1/full/";

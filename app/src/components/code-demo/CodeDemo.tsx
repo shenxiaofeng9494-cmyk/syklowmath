@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import CodeMirror from "@uiw/react-codemirror";
 import { python } from "@codemirror/lang-python";
 import { usePyodide } from "@/hooks/usePyodide";
-import type { CodeDemoData, CodeExecutionResult } from "@/types/excalidraw";
+import type { CodeDemoData, CodeExecutionResult } from "@/types/code-demo";
 import { Play, Loader2, CheckCircle, XCircle, ChevronDown, ChevronUp } from "lucide-react";
 
 interface CodeDemoProps {

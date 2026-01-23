@@ -19,6 +19,7 @@ interface VideoPlayerProps {
   onToggleConversation: () => void;
   onContextUpdate?: (context: { currentTime: number; subtitle: string; context: string }) => void;
   onJumpToNode?: (node: VideoNode) => void;
+  onNodeComplete?: (node: VideoNode) => void;
 }
 
 export interface VideoPlayerHandle {
@@ -35,7 +36,8 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
     isInConversation,
     onToggleConversation,
     onContextUpdate,
-    onJumpToNode
+    onJumpToNode,
+    onNodeComplete
   }, ref) {
     const videoRef = useRef<HTMLVideoElement>(null);
     const [isPlaying, setIsPlaying] = useState(false);
@@ -43,6 +45,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
     const [duration, setDuration] = useState(0);
     const [currentSubtitle, setCurrentSubtitle] = useState("");
     const [hoveredNode, setHoveredNode] = useState<VideoNode | null>(null);
+    const [lastCompletedNodeId, setLastCompletedNodeId] = useState<number | null>(null);
 
     // 暴露控制方法给父组件
     useImperativeHandle(ref, () => ({
@@ -78,6 +81,27 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
         });
       }
     }, [currentTime, subtitles, isInConversation, onContextUpdate]);
+
+    // 检测节点播放完成
+    useEffect(() => {
+      if (!onNodeComplete || nodes.length === 0 || !isPlaying) return;
+
+      // 找到当前正在播放的节点
+      const currentNode = nodes.find(
+        node => currentTime >= node.startTime && currentTime <= node.endTime
+      );
+
+      if (!currentNode) return;
+
+      // 检测是否刚刚完成（当前时间接近节点结束时间）
+      const isNearEnd = currentNode.endTime - currentTime < 1;
+      const isNewCompletion = lastCompletedNodeId !== currentNode.order;
+
+      if (isNearEnd && isNewCompletion) {
+        setLastCompletedNodeId(currentNode.order);
+        onNodeComplete(currentNode);
+      }
+    }, [currentTime, nodes, isPlaying, onNodeComplete, lastCompletedNodeId]);
 
     // 播放/暂停
     const togglePlay = useCallback(() => {

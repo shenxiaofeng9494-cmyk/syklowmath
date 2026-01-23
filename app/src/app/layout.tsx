@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import "@excalidraw/excalidraw/index.css";
 
 export const metadata: Metadata = {
   title: "MathTalkTV - 对话式数学视频学习",

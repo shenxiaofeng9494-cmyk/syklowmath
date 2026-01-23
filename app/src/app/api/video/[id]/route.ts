@@ -51,11 +51,72 @@ export async function GET(
     // 映射为客户端格式
     const clientVideo = mapDBVideoToClient(data)
 
-    return NextResponse.json(clientVideo)
+    return NextResponse.json({ video: clientVideo })
   } catch (error) {
     console.error('Failed to fetch video:', error)
     return NextResponse.json(
       { error: 'Failed to fetch video' },
+      { status: 500 }
+    )
+  }
+}
+
+/**
+ * DELETE /api/video/[id]
+ * 删除视频及其相关数据（节点和游戏）
+ */
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params
+
+    // 开始事务删除：先删除相关数据，再删除视频
+    // 1. 删除相关游戏
+    const { error: gamesError } = await supabase
+      .from('video_games')
+      .delete()
+      .eq('video_id', id)
+
+    if (gamesError) {
+      console.warn('Failed to delete games:', gamesError)
+      // 游戏删除失败不影响视频删除
+    }
+
+    // 2. 删除相关节点
+    const { error: nodesError } = await supabase
+      .from('video_nodes')
+      .delete()
+      .eq('video_id', id)
+
+    if (nodesError) {
+      console.warn('Failed to delete nodes:', nodesError)
+      // 节点删除失败不影响视频删除
+    }
+
+    // 3. 删除视频
+    const { error: videoError } = await supabase
+      .from('videos')
+      .delete()
+      .eq('id', id)
+
+    if (videoError) {
+      console.error('Failed to delete video:', videoError)
+      return NextResponse.json(
+        { error: 'Failed to delete video' },
+        { status: 500 }
+      )
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: 'Video deleted successfully',
+    })
+  } catch (error) {
+    console.error('Failed to delete video:', error)
+    return NextResponse.json(
+      { error: 'Failed to delete video' },
       { status: 500 }
     )
   }

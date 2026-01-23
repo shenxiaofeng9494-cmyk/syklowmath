@@ -660,7 +660,10 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions) {
 
   // 停止录音
   const stopListening = useCallback(() => {
-    console.log("Stopping listening...");
+    // Only log if actually listening
+    if (mediaStreamRef.current || processorRef.current) {
+      console.log("Stopping listening...");
+    }
 
     // 停止音频处理
     if (processorRef.current) {
@@ -726,7 +729,10 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions) {
 
   // 断开连接
   const disconnect = useCallback(() => {
-    console.log("Disconnecting...");
+    // Only log if actually connected
+    if (wsRef.current) {
+      console.log("Disconnecting...");
+    }
 
     stopListening();
 

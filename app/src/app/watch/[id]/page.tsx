@@ -5,10 +5,8 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { VideoPlayer, VideoPlayerHandle } from "@/components/video-player/VideoPlayer";
 import { VoiceInteraction } from "@/components/voice-interaction/VoiceInteraction";
-import { ViewSwitcher } from "@/components/video-player/ViewSwitcher";
-import { ExcalidrawCanvas } from "@/components/whiteboard/ExcalidrawCanvas";
+import { GamePrompt } from "@/components/game-player/GamePrompt";
 import { getVideoById, SubtitleCue } from "@/data/videos";
-import type { DrawingData, ViewType } from "@/types/excalidraw";
 
 interface ClientVideo {
   id: string;
@@ -58,7 +56,8 @@ export default function WatchPage() {
         const response = await fetch(`${API_BASE}/api/video/${videoId}`);
 
         if (response.ok) {
-          const data: ClientVideo = await response.json();
+          const json = await response.json();
+          const data: ClientVideo = json.video || json;
           setVideo(data);
         } else {
           // 如果 API 失败，尝试从旧的硬编码数据获取（向后兼容）
@@ -115,10 +114,6 @@ export default function WatchPage() {
     context: "",
   });
 
-  // 视图切换状态（视频/画板）
-  const [activeView, setActiveView] = useState<ViewType>("video");
-  const [drawingData, setDrawingData] = useState<DrawingData | null>(null);
-
   // 字幕状态
   const [subtitles, setSubtitles] = useState<SubtitleCue[]>([]);
   const [subtitleStatus, setSubtitleStatus] = useState<"loading" | "ready" | "error">("loading");
@@ -130,8 +125,13 @@ export default function WatchPage() {
     title: string;
     startTime: number;
     endTime: number;
+    id?: string;
   }
   const [nodes, setNodes] = useState<VideoNode[]>([]);
+
+  // 游戏提示状态
+  const [showGamePrompt, setShowGamePrompt] = useState(false);
+  const [completedNode, setCompletedNode] = useState<VideoNode | null>(null);
 
   // 加载字幕
   useEffect(() => {
@@ -175,7 +175,8 @@ export default function WatchPage() {
         if (response.ok) {
           const data = await response.json();
           if (data.nodes && Array.isArray(data.nodes)) {
-            setNodes(data.nodes.map((n: { order: number; title: string; startTime: number; endTime: number }) => ({
+            setNodes(data.nodes.map((n: { id?: string; order: number; title: string; startTime: number; endTime: number }) => ({
+              id: n.id || `node-${videoId}-${n.order}`,
               order: n.order,
               title: n.title,
               startTime: n.startTime,
@@ -224,26 +225,29 @@ export default function WatchPage() {
     videoPlayerRef.current?.play();
   }, []);
 
-  // 显示 AI 绘制的图形
-  const handleShowDrawing = useCallback((data: DrawingData) => {
-    console.log("handleShowDrawing called with:", data);
-    console.log("Elements count:", data.elements?.length);
+  // 节点播放完成时的回调
+  const handleNodeComplete = useCallback((node: VideoNode) => {
+    console.log("Node completed:", node.title);
+    // 暂停视频并显示游戏提示
+    videoPlayerRef.current?.pause();
+    setCompletedNode(node);
+    setShowGamePrompt(true);
+  }, []);
 
-    // 累积 elements 而不是替换
-    setDrawingData((prev) => {
-      if (!prev || !prev.elements || prev.elements.length === 0) {
-        // 第一次画图，直接使用新数据
-        return data;
-      }
-      // 追加新元素到已有元素
-      return {
-        elements: [...prev.elements, ...(data.elements || [])],
-        title: prev.title ? `${prev.title} + ${data.title || '新图形'}` : data.title,
-      };
-    });
+  // 关闭游戏提示（跳过游戏）
+  const handleDismissGame = useCallback(() => {
+    setShowGamePrompt(false);
+    setCompletedNode(null);
+    // 继续播放视频
+    videoPlayerRef.current?.play();
+  }, []);
 
-    setActiveView("drawing"); // 自动切换到画板视图
-    console.log("View switched to drawing");
+  // 游戏完成后继续播放
+  const handleGameContinue = useCallback(() => {
+    setShowGamePrompt(false);
+    setCompletedNode(null);
+    // 继续播放视频
+    videoPlayerRef.current?.play();
   }, []);
 
   // 视频加载中
@@ -328,41 +332,18 @@ export default function WatchPage() {
           </div>
         )}
 
-        {/* Video/Drawing Area */}
+        {/* 视频区域 */}
         <div className="relative aspect-video bg-black rounded-lg overflow-hidden">
-          {/* View Switcher - 只要有画板内容，或不在视频视图，就显示 */}
-          {(drawingData || activeView !== "video") && (
-            <div className="absolute top-4 right-4 z-20">
-              <ViewSwitcher
-                activeView={activeView}
-                onSwitch={setActiveView}
-                hasDrawing={!!drawingData}
-              />
-            </div>
-          )}
-
-          {/* Video Player */}
-          <div className={activeView === "video" ? "block h-full" : "hidden"}>
-            <VideoPlayer
-              ref={videoPlayerRef}
-              videoUrl={video.videoUrl}
-              subtitles={subtitles}
-              nodes={nodes}
-              isInConversation={isInConversation}
-              onToggleConversation={toggleConversation}
-              onContextUpdate={handleContextUpdate}
-            />
-          </div>
-
-          {/* Excalidraw Canvas */}
-          {activeView === "drawing" && (
-            <div className="absolute inset-0">
-              <ExcalidrawCanvas
-                drawingData={drawingData}
-                className="w-full h-full"
-              />
-            </div>
-          )}
+          <VideoPlayer
+            ref={videoPlayerRef}
+            videoUrl={video.videoUrl}
+            subtitles={subtitles}
+            nodes={nodes}
+            isInConversation={isInConversation}
+            onToggleConversation={toggleConversation}
+            onContextUpdate={handleContextUpdate}
+            onNodeComplete={handleNodeComplete}
+          />
         </div>
 
         {/* Voice Interaction Panel */}
@@ -379,7 +360,6 @@ export default function WatchPage() {
               onPauseVideo={handlePauseVideo}
               onResumeVideo={handleResumeVideo}
               onJumpToTime={handleJumpToTime}
-              onShowDrawing={handleShowDrawing}
             />
           </div>
         )}
@@ -401,6 +381,17 @@ export default function WatchPage() {
           </div>
         </div>
       </main>
+
+      {/* 游戏提示弹窗 */}
+      {showGamePrompt && completedNode && completedNode.id && (
+        <GamePrompt
+          videoId={videoId}
+          nodeId={completedNode.id}
+          nodeTitle={completedNode.title}
+          onDismiss={handleDismissGame}
+          onContinue={handleGameContinue}
+        />
+      )}
     </div>
   );
 }

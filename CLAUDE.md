@@ -6,187 +6,296 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 MathTalkTV is an interactive voice-enabled video learning platform for mathematics education. Students can pause educational videos and ask AI questions in real-time using voice, with AI responding via speech and visual demonstrations on a whiteboard. Target audience is middle school students (12-15 years old) learning mathematics in Chinese.
 
+**Key Features:**
+- Real-time voice conversation with AI tutor using OpenAI Realtime API
+- Interactive whiteboard with LaTeX formulas, function graphs, and geometry drawings
+- Video node segmentation with RAG-powered search
+- AI-generated math games for practice
+
 ## Tech Stack
 
 - **Framework:** Next.js 16 with App Router
 - **Language:** TypeScript (strict mode)
 - **UI:** React 19, Tailwind CSS 4, shadcn/ui (Radix UI)
-- **Math Rendering:** KaTeX for LaTeX formulas, Mafs for interactive function graphs, Excalidraw for geometry drawings
+- **Math Rendering:** KaTeX for LaTeX formulas, Mafs for interactive function graphs
 - **Animation:** Framer Motion
-- **AI Services:** OpenAI Realtime API (voice interaction), Whisper/Paraformer API (video transcription)
+- **AI Services:** OpenAI Realtime API (voice interaction), Whisper/Paraformer API (video transcription), Claude Agent SDK (game generation)
 - **Database:** Supabase (PostgreSQL with pgvector for RAG)
 - **Storage:** Aliyun OSS for video files
 - **Icons:** Lucide React
 
 ## Commands
 
-```bash
-# All commands run from /app directory
-cd app
+All commands run from the `/app` directory:
 
-npm run dev      # Start development server on http://localhost:3000
-npm run build    # Production build
-npm run lint     # ESLint
-npm start        # Start production server
-```
-
-Adding shadcn/ui components:
 ```bash
+# Development
+npm run dev              # Start dev server on http://localhost:3000
+npm run build            # Production build
+npm run start            # Start production server
+npm run lint             # Run ESLint (runs `eslint` with no path args)
+
+# Adding shadcn/ui components
 npx shadcn@latest add [component-name]
 ```
 
+**Note:** No test runner is configured. Testing infrastructure would need to be added if tests are required.
+
 ## Architecture
 
-### Directory Structure
+### High-Level System
 
 ```
-app/
-├── src/
-│   ├── app/                    # Next.js App Router
-│   │   ├── page.tsx           # Home - video list
-│   │   ├── watch/[id]/page.tsx # Video player + voice interaction
-│   │   ├── admin/page.tsx     # Admin dashboard
-│   │   └── api/
-│   │       ├── realtime/route.ts      # Creates OpenAI Realtime session
-│   │       ├── transcribe/route.ts    # Whisper transcription with caching
-│   │       ├── upload/route.ts        # Video upload handling
-│   │       └── video/
-│   │           ├── [id]/route.ts      # Get video by ID
-│   │           ├── process/route.ts   # Video processing
-│   │           ├── full-process/route.ts
-│   │           └── search/route.ts    # Video search (RAG)
-│   ├── components/
-│   │   ├── video-player/      # HTML5 video with subtitle sync, ViewSwitcher
-│   │   ├── voice-interaction/ # Chat UI + voice handling
-│   │   └── whiteboard/        # LaTeX formulas, function graphs, geometry drawings
-│   ├── hooks/
-│   │   └── useRealtimeVoice.ts # WebSocket + audio processing (core voice logic)
-│   ├── tool-guides/            # Tool usage guides (loaded on-demand)
-│   │   ├── loader.ts          # YAML frontmatter parsing, guide loading
-│   │   ├── whiteboard/GUIDE.md # formula/graph/drawing usage
-│   │   └── drawing/GUIDE.md   # Geometry coordinate system details
-│   ├── types/
-│   │   └── excalidraw.ts      # TypeScript interfaces for drawing & code data
-│   ├── lib/
-│   │   ├── utils.ts           # Utility functions (cn helper)
-│   │   ├── supabase.ts        # Supabase client initialization
-│   │   ├── oss.ts             # Aliyun OSS client for video storage
-│   │   ├── rag.ts             # RAG queries (getNodeByTime, searchNodes, getAllNodes)
-│   │   ├── embedding.ts       # Vector embedding utilities (DashScope)
-│   │   ├── aliyun-asr.ts      # Aliyun Paraformer speech recognition
-│   │   ├── video-processor.ts # Video processing orchestration
-│   │   └── node-segmentation/ # V1 node segmentation pipeline
-│   │       ├── index.ts           # Main entry: segmentVideoNodesV1()
-│   │       ├── candidate-boundaries.ts  # Multi-signal boundary detection
-│   │       ├── llm-adjudicator.ts      # LLM-based boundary confirmation
-│   │       ├── merge-split.ts          # Duration constraint enforcement
-│   │       └── quality-validator.ts    # Boundary quality checks
-│   └── data/
-│       └── videos.ts          # Video metadata + subtitle utilities
-├── public/
-│   ├── videos/                # Video files (place demo.mp4 here)
-│   └── subtitles/             # Cached subtitle JSONs
+┌─────────────────┐
+│   Video Player  │  ← Student watches educational videos
+└────────┬────────┘
+         │
+         │ pauses & clicks
+         │ "加入对话" (join conversation)
+         ▼
+┌─────────────────────────────────────┐
+│  /api/realtime                       │  ← Creates OpenAI Realtime session
+│  - Injects RAG context               │
+│  - System prompt as friendly tutor  │
+└────────┬────────────────────────────┘
+         │
+         │ WebSocket connection
+         ▼
+┌─────────────────────────────────────┐
+│  OpenAI Realtime API                │  ← Voice processing & AI reasoning
+│  - 24kHz PCM audio                  │
+│  - Tool calls: whiteboard, video    │
+└────────┬────────────────────────────┘
+         │
+         │ Tool invocations
+         ▼
+┌──────────────┬──────────────┬──────────────┐
+│  Whiteboard  │    Video     │  Math Games  │
+│  - LaTeX     │  - Jump to   │  - AI-generated│
+│  - Graphs    │    nodes     │    practice   │
+│  - Drawings  │  - Resume     │  - Interactive │
+└──────────────┴──────────────┴──────────────┘
 ```
 
-### Key Data Flow
+### Core Components
 
-1. Student pauses video → clicks "加入对话" (join conversation)
-2. Frontend calls `/api/realtime` for session token
-3. WebSocket connects to OpenAI Realtime API
-4. Voice captured (PCM 16-bit @ 24kHz) → AI processes → TTS audio returned
-5. AI tool calls: `use_whiteboard` renders LaTeX formulas, `resume_video` continues playback
+**Frontend Components:**
+- `src/components/video-player/` - HTML5 video with subtitle sync, view switching
+- `src/components/voice-interaction/` - Chat UI with voice controls
+- `src/components/whiteboard/` - Math rendering (KaTeX, Mafs)
+- `src/components/game-player/` - Interactive math game interface
+- `src/components/game-preview/` - Game selection and preview
 
-### Critical Files
+**Core Logic:**
+- `src/hooks/useRealtimeVoice.ts` - WebSocket, audio I/O, VAD, tool handling (OpenAI Realtime)
+- `src/hooks/voice/` - Three-stage voice pipeline (Doubao ASR + DeepSeek LLM + Doubao TTS)
+- `src/hooks/usePyodide.ts` - Python execution in browser (code demos)
+- `src/lib/game-generator/` - AI game generation using Claude Agent SDK
 
-- `useRealtimeVoice.ts`: Core voice interaction hook managing WebSocket, audio capture/playback, VAD, and tool handling
-- `/api/realtime/route.ts`: System prompt engineering - AI configured as friendly peer tutor ("学长/学姐"), requires whiteboard for all formulas
-- `Whiteboard.tsx`: KaTeX formula rendering and Mafs function graphing with step-by-step animation support
-- `ViewSwitcher.tsx`: Switches between video and drawing (Excalidraw) views
+**Backend APIs:**
+- `/api/realtime` - OpenAI Realtime session creation (legacy)
+- `/api/voice/*` - New voice endpoints (session, chat, asr, tts, doubao-realtime, tool-detect)
+- `/api/video/*` - Video CRUD, processing, search, context, nodes, and segment-volcengine endpoints
+- `/api/game/*` - Game generation (generate, batch-generate, feedback, per-game feedback)
+- `/api/transcribe` - Whisper transcription with caching
+- `/api/upload` - File upload to Aliyun OSS
 
-### AI Tool Calls
+### Video Processing Pipeline
 
-The OpenAI Realtime API is configured with four tools that the AI can invoke:
-- `use_whiteboard`: Displays math content on the whiteboard. Supports three types:
-  - `formula`: LaTeX formulas rendered with KaTeX
-  - `graph`: Function plots rendered with Mafs
-  - `drawing`: Geometry drawings rendered with Excalidraw (auto-switches to drawing view)
-- `resume_video`: Resumes video playback when student indicates understanding (auto-switches back to video view)
-- `jump_to_video_node`: Jumps to a specific knowledge point in the video. Searches subtitles first (precise timestamps), falls back to node list
-- `load_tool_guide`: Loads detailed tool usage guides on-demand from `src/tool-guides/*/GUIDE.md`. Available guides: whiteboard, drawing. System prompt is kept slim; detailed instructions loaded when needed
-
-### RAG Context Injection
-
-The `/api/realtime` route injects context into the AI system prompt:
-- **Node list**: All video nodes with timestamps for jump navigation
-- **Current 30-second window**: Subtitle text from the last 30 seconds before pause (prevents AI from referencing content user hasn't seen)
-- Context is assembled in `route.ts` and passed to OpenAI session creation
+1. **Upload** → Aliyun OSS storage
+2. **Transcription** → Paraformer API with timestamps
+3. **Node Segmentation** → Two methods available:
+   - **GPT-4o (default)**: Semantic analysis of transcript, understands teaching structure
+   - **Volcengine**: Visual scene detection, fast, good for PPT/whiteboard transitions
+4. **Embedding** → DashScope vectorization for RAG
+5. **Storage** → Supabase with pgvector for similarity search
 
 ## Environment Setup
 
 Create `app/.env.local` from `.env.local.example`:
-```
-# Required: OpenAI API key for Realtime API voice interaction
+
+```bash
+# Voice Backend Option 1: OpenAI Realtime API (legacy)
 OPENAI_API_KEY=sk-...
 
-# Optional: Supabase for RAG vector retrieval and video storage
-SUPABASE_URL=https://your-project-id.supabase.co
-SUPABASE_ANON_KEY=your-supabase-anon-key
+# Voice Backend Option 2: Doubao ASR + DeepSeek LLM + Doubao TTS (recommended)
+# DeepSeek LLM
+DEEPSEEK_API_KEY=sk-...
 
-# Optional: Aliyun DashScope for embedding and ASR
+# Doubao Voice (Bearer Token for ASR and TTS)
+DOUBAO_API_TOKEN=your-api-token
+
+# Optional: Doubao resource IDs (defaults shown)
+# DOUBAO_ASR_RESOURCE_ID=volc.bigasr.sauc.duration
+# DOUBAO_TTS_RESOURCE_ID=volc.megatts.default
+# DOUBAO_TTS_VOICE=zh_female_tianmeixiaoyuan_moon_bigtts
+
+# Game Generation (Claude Agent SDK)
+ANTHROPIC_API_KEY=sk-ant-...          # For Claude models
+# Optional: Custom Anthropic-compatible API provider
+# ANTHROPIC_BASE_URL=your-custom-api-endpoint
+# GAME_AGENT_MODEL=claude-opus-4-5-20251101
+
+# Optional: Supabase (RAG + storage)
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_ANON_KEY=your-anon-key
+
+# Optional: Aliyun (embedding + ASR + OSS)
 DASHSCOPE_API_KEY=sk-...
-
-# Optional: Aliyun OSS for video file storage
 OSS_REGION=oss-cn-hangzhou
-OSS_BUCKET=your-bucket-name
-OSS_ACCESS_KEY_ID=your-access-key-id
-OSS_ACCESS_KEY_SECRET=your-access-key-secret
+OSS_BUCKET=your-bucket
+OSS_ACCESS_KEY_ID=...
+OSS_ACCESS_KEY_SECRET=...
+
+# Optional: Volcengine (visual scene segmentation)
+VOLCENGINE_ACCESS_KEY_ID=...
+VOLCENGINE_ACCESS_KEY_SECRET=...
 ```
 
-Minimum requirement: OpenAI API key with access to Realtime API and Whisper.
+**Minimum requirement:** Either OpenAI API key OR (DeepSeek API key + Doubao token) for voice interaction.
 
-## Path Aliases
+## Critical Files
 
-TypeScript configured with `@/*` → `./src/*` (defined in tsconfig.json)
+### Voice Interaction
+**Legacy (OpenAI Realtime):**
+- **`useRealtimeVoice.ts`** - Core WebSocket + audio management
+- **`/api/realtime/route.ts`** - System prompt engineering, RAG context injection
 
-## Audio Processing
+**New Three-Stage Pipeline (Doubao + DeepSeek):**
+- **`src/hooks/voice/useVoiceInteraction.ts`** - Main coordinator hook
+- **`src/hooks/voice/useDoubaoASR.ts`** - Doubao streaming ASR client
+- **`src/hooks/voice/useDeepSeekLLM.ts`** - DeepSeek LLM with function calling
+- **`src/hooks/voice/useDoubaoTTS.ts`** - Doubao bidirectional TTS client
+- **`src/hooks/voice/useDoubaoRealtimeVoice.ts`** - Doubao realtime voice integration
+- **`src/hooks/voice/useAudioCapture.ts`** - Microphone capture with resampling
+- **`src/hooks/voice/useAudioPlayback.ts`** - Audio playback queue
+- **`src/hooks/voice/doubao-protocol.ts`** - Doubao WebSocket protocol definitions
+- **`src/hooks/voice/types.ts`** - Voice system type definitions
+- **`/api/voice/session/route.ts`** - Session initialization with RAG context
+- **`/api/voice/chat/route.ts`** - DeepSeek streaming proxy
+- **`/api/voice/asr/route.ts`** - ASR endpoint
+- **`/api/voice/tts/route.ts`** - TTS endpoint
+- **`/api/voice/doubao-realtime/route.ts`** - Doubao realtime WebSocket proxy
+- **`/api/voice/tool-detect/route.ts`** - Tool detection endpoint
 
-- Sample rate: 24kHz for both input capture and playback
-- Format: PCM 16-bit, base64 encoded for WebSocket transmission
-- Audio queue management in `useRealtimeVoice.ts` for sequential playback
-- Supports speech interruption (clears playback queue on new user input)
+**AI Tools configured:**
+  - `use_whiteboard` - formula/graph/drawing rendering
+  - `resume_video` - continues playback
+  - `jump_to_video_node` - navigates to knowledge points
+  - `load_tool_guide` - on-demand help loading
 
-## Expression Parsing (Whiteboard)
+### Math Rendering
+- **`Whiteboard.tsx`** - KaTeX + Mafs + expression parsing
+  - Converts `x^2` → `Math.pow(x, 2)`
+  - Handles trig functions, implicit multiplication
+  - Safe evaluation with `new Function()` + validation
 
-The `Whiteboard.tsx` component parses math expressions to JavaScript for Mafs graphing:
-- Converts power notation: `x^2` → `Math.pow(x, 2)`
-- Handles trig functions: `sin`, `cos`, `tan`, etc.
-- Supports implicit multiplication: `2x` → `2*x`
-- Safe evaluation using `new Function()` with isFinite validation
+### Game Generation (Experimental)
+- **`/lib/game-generator/index.ts`** - Claude Agent SDK integration
+- **`/lib/game-generator/prompts.ts`** - Game generation prompts
+- **`/lib/game-generator/types.ts`** - Game data structures
+- **`/app/teacher/page.tsx`** - Teacher interface for game creation
 
-## Video Processing Pipeline
+### Node Segmentation
+- **`/lib/node-segmentation/`** - V1 pipeline (deprecated)
+- **`/lib/node-segmentation-v2.ts`** - GPT-4o semantic analysis (default)
+- **`/lib/volcengine-scene-segmentation.ts`** - Volcengine visual scene detection API
+- **`/lib/volcengine-auth.ts`** - Volcengine AWS Signature V4 authentication
+- **`/lib/volcengine-node-converter.ts`** - Convert Volcengine scenes to VideoNode format
+- **`/lib/video-processor.ts`** - Main processing pipeline, supports both methods
 
-When a video is uploaded via `/admin`:
-1. **Upload**: Video stored to Aliyun OSS
-2. **Transcription**: Paraformer API generates subtitles with timestamps
-3. **Node Segmentation (V1)**: Multi-signal boundary detection → LLM adjudication → duration constraints → quality validation
-4. **Embedding**: Node summaries embedded via DashScope for RAG search
-5. **Storage**: Video metadata and nodes saved to Supabase
+## Data Flow
 
-### Node Segmentation V1 Architecture
+### Voice Interaction Flow
+1. Student pauses video → clicks "加入对话"
+2. Frontend calls `/api/realtime` → session token returned
+3. WebSocket connects to OpenAI Realtime API
+4. Audio capture: PCM 16-bit @ 24kHz → base64 → WebSocket
+5. AI processes → tool calls → TTS audio returned
+6. Whiteboard/video updates based on AI tool invocations
 
-Located in `src/lib/node-segmentation/`:
-- **Candidate generation**: Combines pause detection, discourse markers ("接下来", "例如"), semantic drift (embedding similarity), and structure patterns
-- **LLM adjudication**: GPT-4o confirms/rejects candidates in chunks
-- **Constraints**: Merge nodes < 45s, split nodes > 240s, add 2s overlap for smooth jumps
-- **Validation**: Detects half-sentence starts ("所以", "因此") and dangling ends
+### RAG Context Injection
+`/api/realtime/route.ts` assembles context:
+- **Video nodes** - All knowledge points with timestamps
+- **Current window** - Last 30s of subtitles before pause
+- Passed to OpenAI session creation for contextual responses
+
+### Video Search
+1. Vector similarity search in Supabase (`search_video_nodes` RPC)
+2. Finds relevant knowledge points across all videos
+3. Returns nodes with timestamps for jump navigation
 
 ## Database Schema
 
-Key Supabase tables (see `src/types/database.ts`):
-- `videos`: Video metadata (id, title, video_url, status, node_count)
-- `video_nodes`: Knowledge point segments with embeddings for RAG
-  - `start_time`/`end_time`: Integer seconds
-  - `embedding`: pgvector for similarity search
-  - `boundary_confidence`, `boundary_signals`: V1 segmentation metadata
+Key Supabase tables (`src/types/database.ts`):
+- **`videos`** - Metadata (title, url, status, node_count)
+- **`video_nodes`** - Knowledge segments with embeddings
+  - `start_time`/`end_time` - Integer seconds
+  - `embedding` - pgvector for similarity search
+  - `boundary_confidence` - V1 segmentation quality score
+- **`video_games`** - AI-generated math games linked to video nodes
 
-RPC function `search_video_nodes` performs vector similarity search.
+## Audio Specifications
+
+- **Sample Rate:** 24kHz (input & output)
+- **Format:** PCM 16-bit
+- **Encoding:** base64 for WebSocket
+- **Queue:** Sequential playback with interruption support
+- **VAD:** Voice Activity Detection for input handling
+
+## Path Aliases
+
+`@/*` → `./src/*` (configured in `tsconfig.json`)
+
+## App Routes
+
+- `/` - Video list homepage
+- `/watch/[id]` - Student video player with voice interaction
+- `/admin` - Video upload and management
+- `/teacher` - Teacher interface for game creation
+- `/teacher/video/[id]` - Per-video game management
+
+## Important Implementation Details
+
+### Expression Parsing (Whiteboard)
+The `Whiteboard.tsx` component safely parses math expressions:
+- Power notation conversion
+- Trigonometric function mapping
+- Implicit multiplication insertion
+- Validation with `isFinite()` checks
+
+## Development Notes
+
+### Test Directories
+Several experimental/test directories exist in `src/app/`:
+- `test-graph/` - Graph rendering experiments
+- `test-voice/` - Voice interaction testing
+- `test-game/`, `game-test-simple/`, `game-test-fix/` - Game feature experiments
+- `quick-test/`, `play-test/`, `final-test/`, `debug-game/` - Rapid prototyping
+
+**Note:** These are not production code - evaluate before making changes.
+
+### Adding New Features
+
+**Math rendering:**
+1. KaTeX for formulas (add to Whiteboard.tsx)
+2. Mafs for interactive graphs
+
+**API endpoints:**
+1. Add route in `/src/app/api/`
+2. Use Supabase client from `@/lib/supabase.ts`
+3. Follow existing RAG patterns in `@/lib/rag.ts`
+
+**Game generation:**
+1. Define types in `/lib/game-generator/types.ts`
+2. Create prompts in `/lib/game-generator/prompts.ts`
+3. Implement in `/lib/game-generator/index.ts`
+4. Add UI in components
+
+## Configuration Files
+
+- `tsconfig.json` - TypeScript with path aliases
+- `eslint.config.mjs` - ESLint + Next.js rules
+- `tailwind.config.ts` - Tailwind CSS v4
+- `postcss.config.mjs` - PostCSS processing
+- `components.json` - shadcn/ui configuration

@@ -110,3 +110,42 @@ export type VideoNodeUpdate = Database['public']['Tables']['video_nodes']['Updat
 export interface VideoNodeSearchResult extends Omit<VideoNode, 'embedding'> {
   similarity: number
 }
+
+// 游戏类型
+export type GameType =
+  | 'parameter-slider'
+  | 'drag-match'
+  | 'number-line'
+  | 'coordinate-plot'
+  | 'equation-balance'
+  | 'geometry-construct'
+  | 'sequence-puzzle'
+  | 'fraction-visual'
+  | 'graph-transform'
+  | 'custom'
+
+export type GameDifficulty = 'easy' | 'medium' | 'hard'
+
+// 视频游戏表类型
+export interface VideoGame {
+  id: string
+  video_id: string
+  node_id: string
+  title: string
+  description: string
+  game_type: GameType
+  difficulty: GameDifficulty
+  math_concepts: string[]
+  learning_objectives: string[]
+  component_code: string
+  instructions: string
+  hints: string[]
+  estimated_play_time: number
+  agent_model: string
+  generation_time_ms: number
+  created_at: string
+  updated_at: string
+}
+
+export type VideoGameInsert = Omit<VideoGame, 'created_at' | 'updated_at'>
+export type VideoGameUpdate = Partial<VideoGameInsert>

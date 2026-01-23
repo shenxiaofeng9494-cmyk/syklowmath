@@ -1,16 +1,15 @@
 ---
 name: whiteboard
-description: use_whiteboard 工具的详细使用指南，包括公式、函数图像、几何图形三种类型的参数说明和示例。
+description: use_whiteboard 工具的详细使用指南，仅包含公式和函数图像两种类型的参数说明和示例。
 ---
 
 # use_whiteboard 工具使用指南
 
 ## 概述
 
-use_whiteboard 用于在画板上展示数学内容，支持三种类型：
+use_whiteboard 用于在画板上展示数学内容，支持两种类型：
 - `formula`: 公式展示（LaTeX 渲染）
 - `graph`: 函数图像（坐标系绘图）
-- `drawing`: 几何图形（Excalidraw 绘图）
 
 ---
 
@@ -85,6 +84,7 @@ use_whiteboard(
 | x_range | x轴范围 | `[-5, 5]` |
 | y_range | y轴范围 | `[-5, 5]` |
 | points | 标记特殊点 | 顶点、交点等 |
+| params | 可调参数 | `[{ "name": "a", "value": 1, "min": -5, "max": 5 }]` |
 
 ### 常见函数示例
 
@@ -103,28 +103,3 @@ points=[{"x": 1, "y": -4, "label": "顶点"}, {"x": -1, "y": 0}, {"x": 3, "y": 0
 ```
 expression="y = 6/x", x_range=[-10, 10], y_range=[-10, 10]
 ```
-
----
-
-## drawing 类型 - 几何图形
-
-用于绘制几何图形，需要详细指南时调用 `load_tool_guide("drawing")`。
-
-### 基本用法
-```
-use_whiteboard(content_type="drawing", title="等腰三角形", elements=[...])
-```
-
-### 坐标系说明
-- 原点在画布左上角
-- X 轴向右为正
-- Y 轴向下为正
-- 建议画布范围：x: 100-500, y: 50-350
-
-### 支持的元素类型
-- `line`: 线段/折线/多边形
-- `ellipse`: 圆/椭圆
-- `rectangle`: 矩形
-- `text`: 文字标注
-
-详细的元素参数和示例请调用 `load_tool_guide("drawing")`。

@@ -4,9 +4,13 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { Whiteboard } from "@/components/whiteboard/Whiteboard";
 import { QuickIntents } from "@/components/voice-interaction/QuickIntents";
 import { useRealtimeVoice } from "@/hooks/useRealtimeVoice";
+import { useVoiceInteraction } from "@/hooks/voice";
+import { useDoubaoRealtimeVoice } from "@/hooks/voice/useDoubaoRealtimeVoice";
 import katex from "katex";
 import "katex/dist/katex.min.css";
-import type { DrawingData, ExcalidrawElementSkeleton } from "@/types/excalidraw";
+
+// Voice backend mode: "openai" for OpenAI Realtime, "doubao" for ASR + LLM + TTS, "doubao_realtime" for Doubao S2S
+type VoiceBackendMode = "openai" | "doubao" | "doubao_realtime";
 
 interface SubtitleCue {
   start: number;
@@ -21,11 +25,11 @@ interface VoiceInteractionProps {
   videoId?: string;              // 视频ID，用于 RAG
   currentTime?: number;          // 当前播放时间
   subtitles?: SubtitleCue[];     // 字幕列表，用于精准跳转
+  voiceBackend?: VoiceBackendMode;  // 语音后端模式，默认 "doubao"
   onToggle: () => void;
   onPauseVideo: () => void;
   onResumeVideo: () => void;
   onJumpToTime?: (time: number) => void;  // 跳转到指定时间
-  onShowDrawing: (data: DrawingData) => void;
 }
 
 type InteractionStatus = "connecting" | "error" | "need_permission" | "listening" | "user_speaking" | "thinking" | "speaking";
@@ -43,6 +47,14 @@ interface Message {
       xRange?: [number, number];
       yRange?: [number, number];
       points?: Array<{ x: number; y: number; label?: string }>;
+      params?: Array<{
+        name: string;
+        value: number;
+        min?: number;
+        max?: number;
+        step?: number;
+        label?: string;
+      }>;
     };
   };
 }
@@ -73,6 +85,15 @@ function MessageBubble({ message }: { message: Message }) {
   const renderedContent = useMemo(() => {
     return renderTextWithLatex(message.content);
   }, [message.content]);
+
+  useEffect(() => {
+    console.log("Render MessageBubble", {
+      id: message.id,
+      role: message.role,
+      hasWhiteboard: !!message.whiteboard,
+      whiteboard: message.whiteboard,
+    });
+  }, [message]);
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
@@ -112,11 +133,11 @@ export function VoiceInteraction({
   videoId,
   currentTime,
   subtitles,
+  voiceBackend = "doubao_realtime",  // 默认使用豆包实时语音大模型
   onToggle,
   onPauseVideo,
   onResumeVideo,
   onJumpToTime,
-  onShowDrawing,
 }: VoiceInteractionProps) {
   const [status, setStatus] = useState<InteractionStatus>("connecting");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -124,10 +145,20 @@ export function VoiceInteraction({
   const [currentAnswer, setCurrentAnswer] = useState("");
   const [permissionError, setPermissionError] = useState<string>("");
   const [pendingWhiteboard, setPendingWhiteboard] = useState<Message["whiteboard"] | null>(null);
+  const [connectionError, setConnectionError] = useState<string>("");
 
   // 用于自动滚动
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const currentAnswerRef = useRef("");
+  const statusRef = useRef(status);
+  const pendingWhiteboardRef = useRef<Message["whiteboard"] | null>(null);
+  // 记录最近一次工具调用的白板数据，避免时序抖动导致丢失
+  const lastWhiteboardRef = useRef<Message["whiteboard"] | null>(null);
+
+  // Keep statusRef in sync
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
 
   const scrollToBottom = () => {
     if (messagesContainerRef.current) {
@@ -139,6 +170,247 @@ export function VoiceInteraction({
     scrollToBottom();
   }, [messages, currentAnswer]);
 
+  // Common callback handlers
+  const handleSpeechStart = () => {
+    console.log("User started speaking, pausing video, interrupting AI");
+    // 如果正在回答中被打断，保存当前回答
+    if (statusRef.current === "speaking" && currentAnswerRef.current) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `assistant-${Date.now()}`,
+          role: "assistant",
+          content: currentAnswerRef.current + " (被打断)",
+          timestamp: new Date(),
+          whiteboard: pendingWhiteboardRef.current || undefined,
+        },
+      ]);
+      currentAnswerRef.current = "";
+      setCurrentAnswer("");
+      pendingWhiteboardRef.current = null;
+      setPendingWhiteboard(null);
+    }
+    setStatus("user_speaking");
+    onPauseVideo();
+  };
+
+  const handleSpeechEnd = () => {
+    console.log("User stopped speaking");
+    setStatus("thinking");
+  };
+
+  const handleTranscript = (text: string, isFinal: boolean) => {
+    console.log("Transcript:", text, "isFinal:", isFinal);
+    setCurrentTranscript(text);
+    if (isFinal && text) {
+      // 添加用户消息到列表
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `user-${Date.now()}`,
+          role: "user",
+          content: text,
+          timestamp: new Date(),
+        },
+      ]);
+      setCurrentTranscript("");
+      // 清空回答准备接收新回答
+      currentAnswerRef.current = "";
+      setCurrentAnswer("");
+    }
+  };
+
+  const handleAnswer = (text: string) => {
+    currentAnswerRef.current += text;
+    setCurrentAnswer(currentAnswerRef.current);
+    setStatus("speaking");
+  };
+
+  const handleAnswerComplete = (text: string) => {
+    // 完整回答（当实时 delta 不可用时）
+    console.log("Answer complete:", text, "whiteboard:", pendingWhiteboardRef.current);
+    // 直接保存到消息列表
+    if (text) {
+      const whiteboard = lastWhiteboardRef.current || pendingWhiteboardRef.current || undefined;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `assistant-${Date.now()}`,
+          role: "assistant",
+          content: text,
+          timestamp: new Date(),
+          whiteboard,
+        },
+      ]);
+      pendingWhiteboardRef.current = null;
+      lastWhiteboardRef.current = null;
+      setPendingWhiteboard(null);
+      // 清空当前回答状态
+      currentAnswerRef.current = "";
+      setCurrentAnswer("");
+    }
+  };
+
+  const handleToolCall = (tool: string, params: Record<string, unknown>) => {
+    console.log("Tool call:", tool, params);
+    if (tool === "use_whiteboard") {
+      const p = params as {
+        content_type: "formula" | "graph";
+        latex?: string;
+        expression?: string;
+        steps?: string[];
+        x_range?: [number, number];
+        y_range?: [number, number];
+        points?: Array<{ x: number; y: number; label?: string }>;
+        params?: Array<{
+          name: string;
+          value: number;
+          min?: number;
+          max?: number;
+          step?: number;
+          label?: string;
+        }>;
+      };
+
+      if (p.content_type === "formula" || p.content_type === "graph") {
+        // formula 或 graph 类型，在消息气泡中显示
+        if (p.content_type === "graph" && !p.expression) {
+          console.warn("Graph tool call missing expression, skipping whiteboard render.", p);
+          return;
+        }
+        const whiteboardData = {
+          type: p.content_type,
+          content: p.latex || p.expression || "",
+          steps: p.steps,
+          graphConfig: p.content_type === "graph" ? {
+            xRange: p.x_range,
+            yRange: p.y_range,
+            points: p.points,
+            params: p.params,
+          } : undefined,
+        };
+        console.log("Setting pendingWhiteboardRef:", whiteboardData);
+        // Use ref for immediate access (state is async)
+        pendingWhiteboardRef.current = whiteboardData;
+        lastWhiteboardRef.current = whiteboardData;
+        setPendingWhiteboard(whiteboardData);
+        console.log("pendingWhiteboardRef.current is now:", pendingWhiteboardRef.current);
+      }
+    }
+  };
+
+  const handleResumeVideo = () => {
+    console.log("AI triggered resume video");
+    onResumeVideo();
+  };
+
+  const handleJumpToTime = (time: number) => {
+    console.log("AI triggered jump to time:", time);
+    onJumpToTime?.(time);
+  };
+
+  const handleComplete = () => {
+    console.log("Response complete, back to listening");
+    // 保存完整回答到消息列表
+    if (currentAnswerRef.current) {
+      const whiteboard = lastWhiteboardRef.current || pendingWhiteboardRef.current || undefined;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `assistant-${Date.now()}`,
+          role: "assistant",
+          content: currentAnswerRef.current,
+          timestamp: new Date(),
+          whiteboard,
+        },
+      ]);
+      currentAnswerRef.current = "";
+      setCurrentAnswer("");
+      pendingWhiteboardRef.current = null;
+      lastWhiteboardRef.current = null;
+      setPendingWhiteboard(null);
+    }
+    // 如果还有未消耗的白板数据，补到最后一条助教消息上（避免时序问题丢失白板）
+    if (pendingWhiteboardRef.current || lastWhiteboardRef.current) {
+      const whiteboard = lastWhiteboardRef.current || pendingWhiteboardRef.current;
+      setMessages((prev) => {
+        if (prev.length === 0) return prev;
+        const last = prev[prev.length - 1];
+        if (last.role !== "assistant") return prev;
+        // 已有白板则不覆盖
+        if (last.whiteboard) return prev;
+        const updated = [...prev];
+        updated[updated.length - 1] = {
+          ...last,
+          whiteboard: whiteboard || undefined,
+        };
+        return updated;
+      });
+      pendingWhiteboardRef.current = null;
+      lastWhiteboardRef.current = null;
+      setPendingWhiteboard(null);
+    }
+    setStatus("listening");
+  };
+
+  // OpenAI Realtime Voice hook (legacy)
+  const realtimeVoice = useRealtimeVoice({
+    videoContext,
+    videoId,
+    currentTime,
+    subtitles,
+    onSpeechStart: handleSpeechStart,
+    onSpeechEnd: handleSpeechEnd,
+    onTranscript: handleTranscript,
+    onAnswer: handleAnswer,
+    onAnswerComplete: handleAnswerComplete,
+    onToolCall: handleToolCall,
+    onResumeVideo: handleResumeVideo,
+    onJumpToTime: handleJumpToTime,
+    onComplete: handleComplete,
+  });
+
+  // New three-stage voice hook (Doubao ASR + DeepSeek + Doubao TTS)
+  const voiceInteraction = useVoiceInteraction({
+    videoContext,
+    videoId,
+    currentTime,
+    subtitles,
+    onSpeechStart: handleSpeechStart,
+    onSpeechEnd: handleSpeechEnd,
+    onTranscript: handleTranscript,
+    onAnswer: handleAnswer,
+    onAnswerComplete: handleAnswerComplete,
+    onToolCall: handleToolCall,
+    onResumeVideo: handleResumeVideo,
+    onJumpToTime: handleJumpToTime,
+    onComplete: handleComplete,
+  });
+
+  // Doubao Realtime (S2S) hook
+  const doubaoRealtimeVoice = useDoubaoRealtimeVoice({
+    videoContext,
+    videoId,
+    currentTime,
+    subtitles,
+    onSpeechStart: handleSpeechStart,
+    onSpeechEnd: handleSpeechEnd,
+    onTranscript: handleTranscript,
+    onAnswer: handleAnswer,
+    onAnswerComplete: handleAnswerComplete,
+    onToolCall: handleToolCall,
+    onResumeVideo: handleResumeVideo,
+    onJumpToTime: handleJumpToTime,
+    onComplete: handleComplete,
+  });
+
+  // Select the appropriate voice hook based on backend mode
+  const voice = voiceBackend === "openai"
+    ? realtimeVoice
+    : voiceBackend === "doubao_realtime"
+      ? doubaoRealtimeVoice
+      : voiceInteraction;
+
   const {
     isConnected,
     isListening,
@@ -147,205 +419,47 @@ export function VoiceInteraction({
     stopListening,
     disconnect,
     sendTextMessage,
-  } = useRealtimeVoice({
-    videoContext,
-    videoId,
-    currentTime,
-    subtitles,
-    onSpeechStart: () => {
-      console.log("User started speaking, pausing video, interrupting AI");
-      // 如果正在回答中被打断，保存当前回答
-      if (status === "speaking" && currentAnswerRef.current) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `assistant-${Date.now()}`,
-            role: "assistant",
-            content: currentAnswerRef.current + " (被打断)",
-            timestamp: new Date(),
-            whiteboard: pendingWhiteboard || undefined,
-          },
-        ]);
-        currentAnswerRef.current = "";
-        setCurrentAnswer("");
-        setPendingWhiteboard(null);
-      }
-      setStatus("user_speaking");
-      onPauseVideo();
-    },
-    onSpeechEnd: () => {
-      console.log("User stopped speaking");
-      setStatus("thinking");
-    },
-    onTranscript: (text, isFinal) => {
-      console.log("Transcript:", text, "isFinal:", isFinal);
-      setCurrentTranscript(text);
-      if (isFinal && text) {
-        // 添加用户消息到列表
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `user-${Date.now()}`,
-            role: "user",
-            content: text,
-            timestamp: new Date(),
-          },
-        ]);
-        setCurrentTranscript("");
-        // 清空回答准备接收新回答
-        currentAnswerRef.current = "";
-        setCurrentAnswer("");
-      }
-    },
-    onAnswer: (text) => {
-      currentAnswerRef.current += text;
-      setCurrentAnswer(currentAnswerRef.current);
-      setStatus("speaking");
-    },
-    onAnswerComplete: (text) => {
-      // 完整回答（当实时 delta 不可用时）
-      console.log("Answer complete:", text);
-      // 直接保存到消息列表
-      if (text) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `assistant-${Date.now()}`,
-            role: "assistant",
-            content: text,
-            timestamp: new Date(),
-            whiteboard: pendingWhiteboard || undefined,
-          },
-        ]);
-        setPendingWhiteboard(null);
-        // 清空当前回答状态
-        currentAnswerRef.current = "";
-        setCurrentAnswer("");
-      }
-    },
-    onToolCall: (tool, params) => {
-      console.log("Tool call:", tool, params);
-      if (tool === "use_whiteboard") {
-        const p = params as {
-          content_type: "formula" | "graph" | "drawing";
-          latex?: string;
-          expression?: string;
-          steps?: string[];
-          x_range?: [number, number];
-          y_range?: [number, number];
-          points?: Array<{ x: number; y: number; label?: string }>;
-          // drawing 类型参数
-          title?: string;
-          diagram_ir?: unknown; // DiagramIR from types
-          elements?: ExcalidrawElementSkeleton[];
-        };
+  } = voice;
 
-        if (p.content_type === "drawing") {
-          if (p.diagram_ir) {
-            // 新方式：使用 Diagram IR，调用渲染 API
-            console.log("Drawing with diagram_ir:", p.diagram_ir);
-            fetch("/api/whiteboard/render", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ diagram_ir: p.diagram_ir }),
-            })
-              .then((res) => res.json())
-              .then((result) => {
-                if (result.success) {
-                  console.log("Render success, elements count:", result.elements?.length);
-                  onShowDrawing({
-                    elements: result.elements,
-                    title: p.title,
-                  });
-                } else {
-                  console.error("Render failed:", result.error);
-                }
-              })
-              .catch((error) => {
-                console.error("Failed to render diagram:", error);
-              });
-          } else if (p.elements) {
-            // 旧方式：向后兼容，直接使用 elements
-            console.log("Drawing tool call detected, elements:", p.elements);
-            onShowDrawing({
-              elements: p.elements,
-              title: p.title,
-            });
-          }
-        } else if (p.content_type === "formula" || p.content_type === "graph") {
-          // formula 或 graph 类型，在消息气泡中显示
-          setPendingWhiteboard({
-            type: p.content_type,
-            content: p.latex || p.expression || "",
-            steps: p.steps,
-            graphConfig: p.content_type === "graph" ? {
-              xRange: p.x_range,
-              yRange: p.y_range,
-              points: p.points,
-            } : undefined,
-          });
-        }
-      }
-    },
-    onResumeVideo: () => {
-      console.log("AI triggered resume video");
-      onResumeVideo();
-    },
-    onJumpToTime: (time) => {
-      console.log("AI triggered jump to time:", time);
-      onJumpToTime?.(time);
-    },
-    onComplete: () => {
-      console.log("Response complete, back to listening");
-      // 保存完整回答到消息列表
-      if (currentAnswerRef.current) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `assistant-${Date.now()}`,
-            role: "assistant",
-            content: currentAnswerRef.current,
-            timestamp: new Date(),
-            whiteboard: pendingWhiteboard || undefined,
-          },
-        ]);
-        currentAnswerRef.current = "";
-        setCurrentAnswer("");
-        setPendingWhiteboard(null);
-      }
-      setStatus("listening");
-    },
-  });
-
-  const [connectionError, setConnectionError] = useState<string>("");
-  const connectAttemptedRef = useRef(false);
+  // Store latest functions in refs to avoid useEffect re-triggering
+  const connectRef = useRef(connect);
+  const disconnectRef = useRef(disconnect);
+  const stopListeningRef = useRef(stopListening);
+  useEffect(() => {
+    connectRef.current = connect;
+    disconnectRef.current = disconnect;
+    stopListeningRef.current = stopListening;
+  }, [connect, disconnect, stopListening]);
 
   // 当激活状态变化时连接
   useEffect(() => {
-    if (isActive && !connectAttemptedRef.current) {
-      console.log("VoiceInteraction activated, connecting...");
-      connectAttemptedRef.current = true;
-      setConnectionError("");
+    if (isActive) {
+      // Only connect if not already connected
+      if (!isConnected) {
+        console.log("VoiceInteraction activated, connecting...");
+        setConnectionError("");
 
-      const timeout = setTimeout(() => {
-        if (!isConnected) {
-          console.error("Connection timeout");
-          setConnectionError("连接超时，请检查网络后重试");
+        const timeout = setTimeout(() => {
+          if (statusRef.current === "connecting") {
+            console.error("Connection timeout");
+            setConnectionError("连接超时，请检查网络后重试");
+            setStatus("error");
+          }
+        }, 10000);
+
+        connectRef.current().catch((err) => {
+          console.error("Connect error:", err);
+          setConnectionError(err.message || "连接失败");
           setStatus("error");
-        }
-      }, 10000);
+        });
 
-      connect().catch((err) => {
-        console.error("Connect error:", err);
-        setConnectionError(err.message || "连接失败");
-        setStatus("error");
-      });
-
-      return () => clearTimeout(timeout);
-    } else if (!isActive) {
+        return () => {
+          clearTimeout(timeout);
+        };
+      }
+    } else {
       console.log("VoiceInteraction deactivated, disconnecting...");
-      connectAttemptedRef.current = false;
-      disconnect();
+      disconnectRef.current();
       setStatus("connecting");
       setMessages([]);
       setCurrentTranscript("");
@@ -354,7 +468,7 @@ export function VoiceInteraction({
       setPermissionError("");
       setConnectionError("");
     }
-  }, [isActive, connect, disconnect, isConnected]);
+  }, [isActive, isConnected]); // Add isConnected to properly track connection state
 
   // 连接成功后显示需要权限
   useEffect(() => {
@@ -372,13 +486,8 @@ export function VoiceInteraction({
     }
   }, [isListening]);
 
-  // 组件卸载时清理
-  useEffect(() => {
-    return () => {
-      stopListening();
-      disconnect();
-    };
-  }, [stopListening, disconnect]);
+  // Note: useVoiceInteraction hook handles its own cleanup on unmount
+  // No need to call disconnect here - it causes issues with React Strict Mode
 
   // 请求麦克风权限并开始监听
   const handleStartListening = async () => {
@@ -502,7 +611,6 @@ export function VoiceInteraction({
             <p className="text-gray-400 text-sm mb-4">{connectionError || "请检查网络连接"}</p>
             <button
               onClick={() => {
-                connectAttemptedRef.current = false;
                 setStatus("connecting");
                 connect();
               }}
