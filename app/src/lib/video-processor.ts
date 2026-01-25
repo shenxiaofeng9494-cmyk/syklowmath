@@ -2,9 +2,13 @@ import { supabase } from './supabase'
 import { generateDocumentEmbedding } from './embedding'
 import { segmentVideoNodesV2 } from './node-segmentation-v2'
 import {
-  waitForSceneSegmentation,
+  waitForSceneSegmentationByVid,
   isVolcengineConfigured,
 } from './volcengine-scene-segmentation'
+import {
+  waitForUpload,
+  isVolcengineUploadConfigured,
+} from './volcengine-upload'
 import {
   convertScenesToNodes,
   mergeShortScenes,
@@ -105,18 +109,40 @@ export async function processVideo(
         throw new Error('火山引擎未配置，请设置 VOLCENGINE_ACCESS_KEY_ID 和 VOLCENGINE_ACCESS_KEY_SECRET')
       }
 
-      updateProgress('segmentation', 10, '正在使用火山引擎进行视觉场景切分...')
+      if (!isVolcengineUploadConfigured()) {
+        throw new Error('火山引擎 VOD 空间未配置，请设置 VOLCENGINE_VOD_SPACE_NAME 环境变量')
+      }
 
-      let scenes = await waitForSceneSegmentation(videoUrl, {
+      // Step 2a: 先上传视频到火山引擎获取 Vid
+      updateProgress('upload', 10, '正在上传视频到火山引擎...')
+
+      const vid = await waitForUpload(videoUrl, {
+        title: title,
+        onProgress: (state, message) => {
+          const progressMap: Record<string, number> = {
+            initial: 12,
+            processing: 18,
+            success: 25,
+          }
+          updateProgress('upload', progressMap[state] || 15, message || `上传${state}...`)
+        },
+      })
+
+      console.log(`[VideoProcessor] 视频上传完成, Vid: ${vid}`)
+
+      // Step 2b: 使用 Vid 进行场景切分
+      updateProgress('segmentation', 28, '正在使用火山引擎进行视觉场景切分...')
+
+      let scenes = await waitForSceneSegmentationByVid(vid, {
         onProgress: (status, message) => {
           const progressMap: Record<string, number> = {
-            submitting: 15,
-            waiting: 20,
-            pending: 25,
-            running: 35,
-            success: 45,
+            submitting: 30,
+            waiting: 33,
+            pending: 36,
+            running: 42,
+            success: 50,
           }
-          updateProgress('segmentation', progressMap[status] || 30, message || `场景切分${status}...`)
+          updateProgress('segmentation', progressMap[status] || 38, message || `场景切分${status}...`)
         },
       })
 

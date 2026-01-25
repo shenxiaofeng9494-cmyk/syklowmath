@@ -13,10 +13,11 @@
 
 import { NextRequest, NextResponse } from "next/server";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const WebSocket = require("ws") as typeof import("ws");
+const WebSocket = require("ws");
 
 // Type for WebSocket instance
-type WebSocketInstance = InstanceType<typeof WebSocket>;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type WebSocketInstance = any;
 
 // Doubao TTS WebSocket URL
 const TTS_WEBSOCKET_URL = "wss://openspeech.bytedance.com/api/v3/tts/bidirection";
@@ -63,7 +64,7 @@ const sessions = new Map<string, {
   ws: WebSocketInstance;
   connectionId: string;
   sessionId: string | null;
-  audioChunks: ArrayBuffer[];
+  audioChunks: Buffer[];
   isConnectionStarted: boolean;
   isSessionStarted: boolean;
   error: string | null;
@@ -289,7 +290,7 @@ async function createSession(): Promise<NextResponse> {
       ws,
       connectionId: connectId,
       sessionId: null as string | null,
-      audioChunks: [] as ArrayBuffer[],
+      audioChunks: [] as Buffer[],
       isConnectionStarted: false,
       isSessionStarted: false,
       error: null as string | null,

@@ -13,10 +13,11 @@
 
 import { NextRequest, NextResponse } from "next/server";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const WebSocket = require("ws") as typeof import("ws");
+const WebSocket = require("ws");
 
 // Type for WebSocket instance
-type WebSocketInstance = InstanceType<typeof WebSocket>;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type WebSocketInstance = any;
 
 // Doubao ASR WebSocket URL (双向流式模式)
 const ASR_WEBSOCKET_URL = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel";
@@ -280,14 +281,14 @@ async function createSession(): Promise<NextResponse> {
       }
     });
 
-    ws.on("error", (error) => {
+    ws.on("error", (error: Error) => {
       clearTimeout(timeout);
       console.error(`ASR session ${sessionId} error:`, error);
       session.error = error.message;
       session.closed = true;
     });
 
-    ws.on("close", (code, reason) => {
+    ws.on("close", (code: number, reason: Buffer) => {
       console.log(`ASR session ${sessionId} closed:`, code, reason.toString());
       session.closed = true;
 

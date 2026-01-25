@@ -3,10 +3,11 @@ import { supabase } from '@/lib/supabase'
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const gameId = params.id
+    const { id } = await params
+    const gameId = id
     const body = await request.json()
     const { feedback, type, gameId: bodyGameId, videoId } = body
 
@@ -71,10 +72,11 @@ export async function POST(
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const gameId = params.id
+    const { id } = await params
+    const gameId = id
 
     const { data: feedback, error } = await supabase
       .from('game_feedback')

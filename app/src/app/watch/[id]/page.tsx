@@ -213,14 +213,12 @@ export default function WatchPage() {
   // 恢复视频（AI 调用 resume_video 时）
   const handleResumeVideo = useCallback(() => {
     console.log("Resuming video");
-    setActiveView("video"); // 切换回视频视图
     videoPlayerRef.current?.play();
   }, []);
 
   // 跳转到指定时间（AI 调用 jump_to_video_node 时）
   const handleJumpToTime = useCallback((time: number) => {
     console.log("Jumping to time:", time);
-    setActiveView("video"); // 切换回视频视图
     videoPlayerRef.current?.seekTo(time);
     videoPlayerRef.current?.play();
   }, []);

@@ -169,7 +169,7 @@ export async function POST(req: NextRequest) {
         arguments: JSON.parse(tc.function.arguments || "{}"),
       }));
 
-      const validatedToolCalls = toolCalls.filter((call) => {
+      const validatedToolCalls = toolCalls.filter((call: { name: string; arguments?: Record<string, unknown> }) => {
         if (call.name === "use_whiteboard") {
           const ct = call.arguments?.content_type as string | undefined;
           if (ct === "graph") {

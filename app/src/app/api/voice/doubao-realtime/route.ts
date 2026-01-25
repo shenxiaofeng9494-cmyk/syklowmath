@@ -7,11 +7,11 @@
 
 import { NextRequest, NextResponse } from "next/server";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const WebSocket = require("ws") as typeof import("ws");
+const WebSocket = require("ws");
 
 // Type for WebSocket instance
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type WebSocketInstance = InstanceType<typeof WebSocket>;
+type WebSocketInstance = any;
 
 const REALTIME_WEBSOCKET_URL = "wss://openspeech.bytedance.com/api/v3/realtime/dialogue";
 const REALTIME_RESOURCE_ID = "volc.speech.dialog";

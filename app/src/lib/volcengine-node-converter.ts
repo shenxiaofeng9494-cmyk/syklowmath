@@ -96,9 +96,10 @@ export function convertScenesToNodes(
  * 合并相邻的短场景
  *
  * 火山引擎可能会切分出很多短场景，可以选择合并
+ * 策略：将短场景合并到前一个场景，直到合并后的场景达到最小时长
  *
  * @param scenes 原始场景列表
- * @param minDuration 最小场景时长（秒），短于此时长的场景会被合并
+ * @param minDuration 最小场景时长（秒），短于此时长的场景会被合并到相邻场景
  * @returns 合并后的场景列表
  */
 export function mergeShortScenes(
@@ -106,19 +107,21 @@ export function mergeShortScenes(
   minDuration: number = 10
 ): SceneSegment[] {
   if (scenes.length === 0) return []
+  if (scenes.length === 1) return scenes
 
   const merged: SceneSegment[] = []
   let current = { ...scenes[0] }
 
   for (let i = 1; i < scenes.length; i++) {
     const scene = scenes[i]
-    const currentDuration = current.end - current.start
+    const sceneDuration = scene.end - scene.start
 
-    if (currentDuration < minDuration) {
-      // 当前场景太短，与下一个合并
+    // 如果下一个场景太短，合并到当前场景
+    if (sceneDuration < minDuration) {
       current.end = scene.end
       current.frames = [current.frames[0], scene.frames[1]]
     } else {
+      // 下一个场景足够长，保存当前场景（无论长短），开始新场景
       merged.push(current)
       current = { ...scene }
     }
@@ -126,6 +129,13 @@ export function mergeShortScenes(
 
   // 添加最后一个场景
   merged.push(current)
+
+  // 如果第一个场景太短，合并到第二个
+  if (merged.length > 1 && merged[0].end - merged[0].start < minDuration) {
+    const first = merged.shift()!
+    merged[0].start = first.start
+    merged[0].frames = [first.frames[0], merged[0].frames[1]]
+  }
 
   return merged
 }

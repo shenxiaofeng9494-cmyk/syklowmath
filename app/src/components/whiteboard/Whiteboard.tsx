@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import katex from "katex";
 import "katex/dist/katex.min.css";
+// @ts-expect-error - plotly.js-dist-min has no type declarations
 import Plotly from "plotly.js-dist-min";
 import * as math from "mathjs";
 

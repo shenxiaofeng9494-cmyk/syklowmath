@@ -34,9 +34,9 @@ export type {
 
 // Constants
 export {
-  ASR_WEBSOCKET_URL,
+  ASR_PROXY_URL,
   ASR_DEFAULTS,
-  TTS_WEBSOCKET_URL,
+  TTS_PROXY_URL,
   TTS_DEFAULTS,
   LLM_DEFAULTS,
   AUDIO_INPUT,

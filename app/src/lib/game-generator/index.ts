@@ -59,7 +59,7 @@ function parseGameOutput(output: string): Partial<GeneratedGame> | null {
 
     // 方法3：尝试查找 title 和 componentCode 字段
     const titleMatch = output.match(/"title":\s*"([^"]+)"/)
-    const codeMatch = output.match(/"componentCode":\s*"([^"]*(?:\\.[^"]*)*)"/s)
+    const codeMatch = output.match(/"componentCode":\s*"([^"]*(?:\\.[^"]*)*)"/)
 
     if (titleMatch && codeMatch) {
       console.log('[GameGenerator] 使用正则表达式提取字段')
@@ -94,7 +94,7 @@ function extractAgentProgress(output: string): { thinking: string[]; steps: stri
   const steps: string[] = []
 
   // 提取思考过程
-  const thinkingMatches = output.match(/<thinking>(.*?)<\/thinking>/gs)
+  const thinkingMatches = output.match(/<thinking>(.*?)<\/thinking>/g)
   if (thinkingMatches) {
     thinkingMatches.forEach(match => {
       const content = match.replace(/<\/?thinking>/g, '').trim()
@@ -103,7 +103,7 @@ function extractAgentProgress(output: string): { thinking: string[]; steps: stri
   }
 
   // 提取步骤信息
-  const stepMatches = output.match(/STEP \d+: (.*?)(?=STEP \d+:|$)/gs)
+  const stepMatches = output.match(/STEP \d+: (.*?)(?=STEP \d+:|$)/g)
   if (stepMatches) {
     stepMatches.forEach(match => {
       const content = match.replace(/STEP \d+: /, '').trim()
@@ -193,7 +193,7 @@ export async function generateGame(
       options: {
         systemPrompt,
         allowedTools: [], // 禁用 WebSearch，简化任务
-        permissionMode: 'bypassPermissions',
+        permissionMode: 'bypassPermissions' as const,
         maxTurns: config.maxTurns || 15, // 增加轮次限制
       },
     }

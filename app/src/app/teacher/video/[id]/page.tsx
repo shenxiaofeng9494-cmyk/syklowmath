@@ -1,23 +1,24 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { useParams } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Play, Clock, Users, Gamepad2, MessageCircle, Send } from 'lucide-react'
+import { ArrowLeft, Play, Gamepad2, MessageCircle, Send, Edit3 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Textarea } from '@/components/ui/textarea'
 import { GamePlayer } from '@/components/game-player/GamePlayer'
+import { VideoNodeTimeline } from '@/components/node-editor'
 
 interface Video {
   id: string
   title: string
   description: string
-  video_url: string
+  videoUrl: string
   status: string
-  node_count: number
-  created_at: string
+  nodeCount: number
+  duration: number
   teacher?: string
 }
 
@@ -46,21 +47,37 @@ interface Game {
 
 export default function VideoDetailPage() {
   const params = useParams()
-  const router = useRouter()
   const videoId = params.id as string
 
   const [video, setVideo] = useState<Video | null>(null)
   const [nodes, setNodes] = useState<VideoNode[]>([])
+  const [originalNodes, setOriginalNodes] = useState<VideoNode[]>([])
   const [games, setGames] = useState<Game[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedGame, setSelectedGame] = useState<Game | null>(null)
   const [showFeedback, setShowFeedback] = useState(false)
   const [feedbackText, setFeedbackText] = useState('')
   const [submittingFeedback, setSubmittingFeedback] = useState(false)
+  const [isEditingNodes, setIsEditingNodes] = useState(false)
+  const [currentTime, setCurrentTime] = useState(0)
+  const videoRef = useRef<HTMLVideoElement>(null)
 
   useEffect(() => {
     fetchVideoDetail()
   }, [videoId])
+
+  // 监听视频时间更新
+  useEffect(() => {
+    const video = videoRef.current
+    if (!video) return
+
+    const handleTimeUpdate = () => {
+      setCurrentTime(video.currentTime)
+    }
+
+    video.addEventListener('timeupdate', handleTimeUpdate)
+    return () => video.removeEventListener('timeupdate', handleTimeUpdate)
+  }, [video])
 
   const fetchVideoDetail = async () => {
     try {
@@ -72,7 +89,9 @@ export default function VideoDetailPage() {
       // 获取节点列表
       const nodesRes = await fetch(`/api/video/${videoId}/nodes`)
       const nodesData = await nodesRes.json()
-      setNodes(nodesData.nodes || [])
+      const fetchedNodes = nodesData.nodes || []
+      setNodes(fetchedNodes)
+      setOriginalNodes(fetchedNodes)
 
       // 获取游戏列表
       const gamesRes = await fetch(`/api/game/generate?videoId=${videoId}`)
@@ -84,6 +103,27 @@ export default function VideoDetailPage() {
     } finally {
       setLoading(false)
     }
+  }
+
+  const handleSeek = useCallback((time: number) => {
+    if (videoRef.current) {
+      videoRef.current.currentTime = time
+    }
+  }, [])
+
+  const handleStartEditing = () => {
+    setOriginalNodes([...nodes])
+    setIsEditingNodes(true)
+  }
+
+  const handleCancelEditing = () => {
+    setNodes(originalNodes)
+    setIsEditingNodes(false)
+  }
+
+  const handleSaveNodes = () => {
+    setOriginalNodes([...nodes])
+    setIsEditingNodes(false)
   }
 
   const handleSubmitFeedback = async () => {
@@ -98,7 +138,7 @@ export default function VideoDetailPage() {
         },
         body: JSON.stringify({
           feedback: feedbackText,
-          type: 'negative', // 老师反馈默认为改进建议
+          type: 'negative',
           gameId: selectedGame.id,
           videoId: videoId,
         }),
@@ -178,48 +218,75 @@ export default function VideoDetailPage() {
 
       <main className="max-w-7xl mx-auto px-4 py-8">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* 左侧 - 视频播放器 */}
-          <div className="lg:col-span-2 space-y-6">
+          {/* 左侧 - 视频播放器和时间轴 */}
+          <div className="lg:col-span-2 space-y-4">
             {/* 视频播放器 */}
             <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Play className="w-5 h-5" />
-                  视频播放器
-                </CardTitle>
+              <CardHeader className="pb-2">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="flex items-center gap-2">
+                    <Play className="w-5 h-5" />
+                    视频播放器
+                  </CardTitle>
+                  {nodes.length > 0 && !isEditingNodes && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleStartEditing}
+                    >
+                      <Edit3 className="w-4 h-4 mr-2" />
+                      编辑节点
+                    </Button>
+                  )}
+                </div>
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-4">
+                {/* 视频 */}
                 <div className="aspect-video bg-black rounded-lg overflow-hidden">
                   <video
+                    ref={videoRef}
                     controls
                     className="w-full h-full"
-                    poster="/api/placeholder/640/360"
+                    src={video.videoUrl}
                   >
-                    <source src={video.video_url} type="video/mp4" />
                     您的浏览器不支持视频播放。
                   </video>
                 </div>
-                <div className="mt-4 flex items-center gap-4 text-sm text-gray-600">
-                  <span>创建时间: {new Date(video.created_at).toLocaleDateString('zh-CN')}</span>
+
+                {/* 节点时间轴 */}
+                {nodes.length > 0 && video.duration > 0 && (
+                  <VideoNodeTimeline
+                    videoId={videoId}
+                    nodes={nodes}
+                    duration={video.duration}
+                    currentTime={currentTime}
+                    isEditing={isEditingNodes}
+                    onSeek={handleSeek}
+                    onNodesChange={setNodes}
+                    onSave={handleSaveNodes}
+                    onCancel={handleCancelEditing}
+                  />
+                )}
+
+                <div className="flex items-center gap-4 text-sm text-gray-600">
+                  <span>时长: {formatTime(video.duration)}</span>
                   {video.teacher && <span>讲师: {video.teacher}</span>}
                 </div>
               </CardContent>
             </Card>
 
-            {/* 知识点节点 */}
+            {/* 知识点列表 */}
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Users className="w-5 h-5" />
-                  知识点分段 ({nodes.length} 个)
-                </CardTitle>
+                <CardTitle>知识点分段 ({nodes.length} 个)</CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
                   {nodes.map((node, index) => (
                     <div
                       key={node.id}
-                      className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition-colors"
+                      className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition-colors cursor-pointer"
+                      onClick={() => handleSeek(node.start_time)}
                     >
                       <div className="flex items-start justify-between mb-2">
                         <div className="flex items-center gap-2">
@@ -352,7 +419,7 @@ export default function VideoDetailPage() {
             <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl">
               <div className="p-6">
                 <h3 className="text-lg font-semibold mb-4">
-                  为 "{selectedGame.title}" 提供反馈
+                  为 &ldquo;{selectedGame.title}&rdquo; 提供反馈
                 </h3>
                 <div className="mb-4">
                   <label className="block text-sm font-medium text-gray-700 mb-2">
