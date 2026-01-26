@@ -4,8 +4,9 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { VideoPlayer, VideoPlayerHandle } from "@/components/video-player/VideoPlayer";
-import { VoiceInteraction } from "@/components/voice-interaction/VoiceInteraction";
+import { ChatPanel } from "@/components/chat-panel/ChatPanel";
 import { GamePrompt } from "@/components/game-player/GamePrompt";
+import { DrawingOverlay, TldrawCanvasHandle, DrawingShape } from "@/components/drawing-canvas";
 import { getVideoById, SubtitleCue } from "@/data/videos";
 
 interface ClientVideo {
@@ -27,6 +28,13 @@ interface VideoContext {
   subtitle: string;
   context: string;
 }
+
+// 格式化时间
+const formatTime = (seconds: number) => {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
+};
 
 interface TranscribeResponse {
   videoId: string;
@@ -108,6 +116,7 @@ export default function WatchPage() {
 
   // 对话状态
   const [isInConversation, setIsInConversation] = useState(false);
+  const [autoStartMic, setAutoStartMic] = useState(false);  // 是否自动开启麦克风
   const [videoContext, setVideoContext] = useState<VideoContext>({
     currentTime: 0,
     subtitle: "",
@@ -132,6 +141,25 @@ export default function WatchPage() {
   // 游戏提示状态
   const [showGamePrompt, setShowGamePrompt] = useState(false);
   const [completedNode, setCompletedNode] = useState<VideoNode | null>(null);
+
+  // 全屏状态
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showChatInFullscreen, setShowChatInFullscreen] = useState(false);
+  const fullscreenContainerRef = useRef<HTMLDivElement>(null);
+
+  // 语音状态（用于控制栏显示）
+  const [isMicActive, setIsMicActive] = useState(false);
+  const [isAISpeaking, setIsAISpeaking] = useState(false);
+
+  // 字幕显示状态
+  const [showSubtitles, setShowSubtitles] = useState(true);
+
+  // 悬浮节点状态（用于全屏模式进度条）
+  const [hoveredNode, setHoveredNode] = useState<VideoNode | null>(null);
+
+  // 画板状态
+  const [isDrawingOpen, setIsDrawingOpen] = useState(false);
+  const drawingCanvasRef = useRef<TldrawCanvasHandle>(null);
 
   // 加载字幕
   useEffect(() => {
@@ -248,6 +276,120 @@ export default function WatchPage() {
     videoPlayerRef.current?.play();
   }, []);
 
+  // 全屏切换
+  const toggleFullscreen = useCallback(() => {
+    if (!document.fullscreenElement) {
+      fullscreenContainerRef.current?.requestFullscreen();
+    } else {
+      document.exitFullscreen();
+    }
+  }, []);
+
+  // 监听全屏变化
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+      // 退出全屏时隐藏聊天框
+      if (!document.fullscreenElement) {
+        setShowChatInFullscreen(false);
+      }
+    };
+
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+    };
+  }, []);
+
+  // 全屏模式下切换聊天框
+  const toggleChatInFullscreen = useCallback(() => {
+    setShowChatInFullscreen((prev) => !prev);
+  }, []);
+
+  // Join Meeting: 进入全屏 + 开始播放 + 加入对话 + 自动开启麦克风
+  const handleJoinMeeting = useCallback(async () => {
+    // 1. 设置自动开启麦克风
+    setAutoStartMic(true);
+    // 2. 显示全屏聊天面板
+    setShowChatInFullscreen(true);
+
+    // 3. 进入全屏
+    try {
+      await fullscreenContainerRef.current?.requestFullscreen();
+      // 全屏成功后再加入对话，避免非全屏 ChatPanel 先渲染
+      // 注意：fullscreenchange 事件会设置 isFullscreen = true
+    } catch (e) {
+      console.error("Failed to enter fullscreen:", e);
+    }
+
+    // 4. 加入对话（延迟一点确保全屏状态已更新）
+    setTimeout(() => {
+      setIsInConversation(true);
+      // 5. 开始播放视频
+      videoPlayerRef.current?.play();
+    }, 100);
+  }, []);
+
+  // 画板操作
+  const handleOpenDrawing = useCallback(() => {
+    setIsDrawingOpen(true);
+  }, []);
+
+  const handleCloseDrawing = useCallback(() => {
+    setIsDrawingOpen(false);
+  }, []);
+
+  const handleDrawShapes = useCallback((shapes: DrawingShape[]) => {
+    if (!isDrawingOpen) {
+      setIsDrawingOpen(true);
+    }
+    // Use setTimeout to ensure the canvas is mounted before drawing
+    setTimeout(() => {
+      drawingCanvasRef.current?.drawShapes(shapes);
+    }, 100);
+  }, [isDrawingOpen]);
+
+  const handleClearDrawing = useCallback(() => {
+    drawingCanvasRef.current?.clear();
+  }, []);
+
+  // 切换字幕显示
+  const toggleSubtitles = useCallback(() => {
+    setShowSubtitles((prev) => !prev);
+  }, []);
+
+  // 语音状态回调
+  const handleMicStatusChange = useCallback((active: boolean) => {
+    setIsMicActive(active);
+  }, []);
+
+  const handleAISpeakingChange = useCallback((speaking: boolean) => {
+    setIsAISpeaking(speaking);
+  }, []);
+
+  // 退出通话 - 只结束对话，不退出全屏
+  const handleEndCall = useCallback(() => {
+    setIsInConversation(false);
+    setShowChatInFullscreen(false);
+    setIsMicActive(false);
+    setAutoStartMic(false);
+  }, []);
+
+  // 麦克风切换回调 - 由 VoiceInteraction 注册
+  const toggleMicRef = useRef<(() => void) | null>(null);
+
+  // 注册麦克风切换回调
+  const handleRegisterToggleMic = useCallback((toggleFn: () => void) => {
+    toggleMicRef.current = toggleFn;
+  }, []);
+
+  // 切换麦克风
+  const handleToggleMic = useCallback(() => {
+    if (toggleMicRef.current) {
+      toggleMicRef.current();
+    }
+  }, []);
+
   // 视频加载中
   if (videoLoading) {
     return (
@@ -283,26 +425,28 @@ export default function WatchPage() {
 
   return (
     <div className="min-h-screen bg-gray-900">
-      {/* Header */}
-      <header className="bg-gray-800 border-b border-gray-700">
-        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center gap-4">
-          <Link
-            href="/"
-            className="text-gray-400 hover:text-white transition-colors"
-          >
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
-          </Link>
-          <div>
-            <h1 className="text-white font-semibold">{video.title}</h1>
-            <p className="text-gray-400 text-sm">{video.teacher}</p>
+      {/* Header - 非全屏时显示 */}
+      {!isFullscreen && (
+        <header className="bg-gray-800 border-b border-gray-700">
+          <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-4">
+            <Link
+              href="/"
+              className="text-gray-400 hover:text-white transition-colors"
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
+            </Link>
+            <div>
+              <h1 className="text-white font-semibold">{video.title}</h1>
+              <p className="text-gray-400 text-sm">{video.teacher}</p>
+            </div>
           </div>
-        </div>
-      </header>
+        </header>
+      )}
 
-      {/* Main Content */}
-      <main className="max-w-5xl mx-auto px-4 py-6">
+      {/* Main Content - 左右布局 */}
+      <main className="max-w-7xl mx-auto px-4 py-6">
         {/* 字幕加载状态 */}
         {subtitleStatus === "loading" && (
           <div className="mb-4 p-4 bg-blue-500/20 border border-blue-500/40 rounded-lg flex items-center gap-3">
@@ -330,37 +474,320 @@ export default function WatchPage() {
           </div>
         )}
 
-        {/* 视频区域 */}
-        <div className="relative aspect-video bg-black rounded-lg overflow-hidden">
-          <VideoPlayer
-            ref={videoPlayerRef}
-            videoUrl={video.videoUrl}
-            subtitles={subtitles}
-            nodes={nodes}
-            isInConversation={isInConversation}
-            onToggleConversation={toggleConversation}
-            onContextUpdate={handleContextUpdate}
-            onNodeComplete={handleNodeComplete}
-          />
-        </div>
+        {/* 视频和聊天区域 - 整个区域作为全屏容器 */}
+        <div
+          ref={fullscreenContainerRef}
+          className={`flex gap-4 ${
+            isFullscreen ? "flex-col h-screen bg-black gap-0" : ""
+          }`}
+        >
+          {/* 全屏模式：上方内容区（视频+聊天） */}
+          {isFullscreen ? (
+            <>
+              <div className="flex flex-1 min-h-0">
+                {/* 视频区域 */}
+                <div
+                  className={`relative bg-black ${
+                    showChatInFullscreen && isInConversation ? "flex-1" : "w-full"
+                  } h-full`}
+                >
+                  <VideoPlayer
+                    ref={videoPlayerRef}
+                    videoUrl={video.videoUrl}
+                    subtitles={subtitles}
+                    nodes={nodes}
+                    isInConversation={isInConversation}
+                    isFullscreen={isFullscreen}
+                    showChatInFullscreen={showChatInFullscreen}
+                    showSubtitles={showSubtitles}
+                    isMicActive={isMicActive}
+                    isAISpeaking={isAISpeaking}
+                    onToggleConversation={toggleConversation}
+                    onToggleFullscreen={toggleFullscreen}
+                    onToggleChat={toggleChatInFullscreen}
+                    onJoinMeeting={handleJoinMeeting}
+                    onContextUpdate={handleContextUpdate}
+                    onNodeComplete={handleNodeComplete}
+                    hideControls={true}
+                  />
+                </div>
 
-        {/* Voice Interaction Panel */}
-        {isInConversation && (
-          <div className="mt-4">
-            <VoiceInteraction
-              videoContext={videoContext.context || `正在观看：${video.title}`}
-              currentSubtitle={videoContext.subtitle}
-              isActive={isInConversation}
-              videoId={videoId}
-              currentTime={videoContext.currentTime}
-              subtitles={subtitles}
-              onToggle={toggleConversation}
-              onPauseVideo={handlePauseVideo}
-              onResumeVideo={handleResumeVideo}
-              onJumpToTime={handleJumpToTime}
-            />
-          </div>
-        )}
+                {/* 聊天面板 - 全屏模式右侧，使用 CSS 控制显示/隐藏以保持对话状态 */}
+                {isInConversation && (
+                  <div className={`w-[350px] shrink-0 h-full border-l border-gray-700 bg-gray-800 ${
+                    showChatInFullscreen ? "" : "hidden"
+                  }`}>
+                    <ChatPanel
+                      videoContext={videoContext.context || `正在观看：${video.title}`}
+                      currentSubtitle={videoContext.subtitle}
+                      isActive={isInConversation}
+                      videoId={videoId}
+                      currentTime={videoContext.currentTime}
+                      subtitles={subtitles}
+                      isFullscreen={isFullscreen}
+                      autoStart={autoStartMic}
+                      onToggle={toggleConversation}
+                      onClose={toggleChatInFullscreen}
+                      onPauseVideo={handlePauseVideo}
+                      onResumeVideo={handleResumeVideo}
+                      onJumpToTime={handleJumpToTime}
+                      onOpenDrawing={handleOpenDrawing}
+                      onCloseDrawing={handleCloseDrawing}
+                      onDrawShapes={handleDrawShapes}
+                      onClearDrawing={handleClearDrawing}
+                      onMicStatusChange={handleMicStatusChange}
+                      onAISpeakingChange={handleAISpeakingChange}
+                      onRegisterToggleMic={handleRegisterToggleMic}
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* 全屏模式：底部统一控制栏 */}
+              <div className="bg-gray-900 border-t border-gray-700 px-4 py-3 shrink-0">
+                {/* 进度条 */}
+                <div
+                  className="relative h-1.5 bg-white/30 rounded-full mb-3 cursor-pointer group"
+                  onClick={(e) => {
+                    if (video.duration > 0) {
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const pos = (e.clientX - rect.left) / rect.width;
+                      handleJumpToTime(pos * video.duration);
+                    }
+                  }}
+                >
+                  {/* 播放进度 */}
+                  <div
+                    className="h-full bg-blue-500 rounded-full transition-all"
+                    style={{ width: `${video.duration > 0 ? (videoContext.currentTime / video.duration) * 100 : 0}%` }}
+                  />
+
+                  {/* 节点分隔标记 */}
+                  {video.duration > 0 && nodes.map((node) => {
+                    const position = (node.startTime / video.duration) * 100;
+                    const isFirstNode = node.startTime <= 0;
+                    return (
+                      <div
+                        key={node.order}
+                        className="absolute top-1/2 -translate-y-1/2 cursor-pointer z-10"
+                        style={{ left: `${position}%` }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleJumpToTime(node.startTime);
+                        }}
+                        onMouseEnter={() => setHoveredNode(node)}
+                        onMouseLeave={() => setHoveredNode(null)}
+                      >
+                        {/* 分隔线或起始标记 */}
+                        {isFirstNode ? (
+                          <div className="w-2.5 h-2.5 bg-blue-400 hover:bg-blue-300 rounded-full transition-colors -translate-x-1/2" />
+                        ) : (
+                          <div className="w-0.5 h-4 bg-white/70 hover:bg-white transition-colors -translate-x-1/2" />
+                        )}
+
+                        {/* 节点序号 */}
+                        <div className="absolute -top-5 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <span className="text-[10px] text-white/80 whitespace-nowrap">{node.order}</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {/* 悬浮提示 */}
+                  {hoveredNode && video.duration > 0 && (
+                    <div
+                      className="absolute -top-10 transform -translate-x-1/2 z-20 pointer-events-none"
+                      style={{ left: `${(hoveredNode.startTime / video.duration) * 100}%` }}
+                    >
+                      <div className="bg-gray-900/95 text-white text-xs px-2 py-1 rounded shadow-lg whitespace-nowrap">
+                        <span className="font-medium">节点 {hoveredNode.order}:</span> {hoveredNode.title}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* 控制按钮行 */}
+                <div className="flex items-center justify-between">
+                {/* 左侧：时间显示 */}
+                <div className="flex items-center gap-4">
+                  <div className="bg-gray-800 rounded-lg px-3 py-1.5 text-white text-sm font-mono">
+                    {formatTime(videoContext.currentTime)} / {formatTime(video.duration)}
+                  </div>
+
+                  {/* 节点选择器 */}
+                  {nodes.length > 0 && (
+                    <select
+                      className="bg-gray-800 text-white text-sm rounded-lg px-3 py-1.5 border border-gray-600 focus:outline-none focus:border-blue-500"
+                      onChange={(e) => {
+                        const node = nodes.find(n => n.order === parseInt(e.target.value));
+                        if (node) {
+                          handleJumpToTime(node.startTime);
+                        }
+                      }}
+                      value=""
+                    >
+                      <option value="" disabled>Section</option>
+                      {nodes.map((node) => (
+                        <option key={node.order} value={node.order}>
+                          {node.order}. {node.title}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                {/* 中间：功能按钮 */}
+                <div className="flex items-center gap-2">
+                  {/* 字幕按钮 */}
+                  <button
+                    onClick={toggleSubtitles}
+                    className={`p-2.5 rounded-lg transition-colors ${
+                      showSubtitles ? "bg-blue-500 text-white" : "bg-gray-800 text-gray-400 hover:text-white"
+                    }`}
+                    title={showSubtitles ? "隐藏字幕" : "显示字幕"}
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+                    </svg>
+                  </button>
+
+                  {/* 画板按钮 */}
+                  <button
+                    onClick={() => setIsDrawingOpen(!isDrawingOpen)}
+                    className={`p-2.5 rounded-lg transition-colors ${
+                      isDrawingOpen ? "bg-blue-500 text-white" : "bg-gray-800 text-gray-400 hover:text-white"
+                    }`}
+                    title={isDrawingOpen ? "关闭画板" : "打开画板"}
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                    </svg>
+                  </button>
+
+                  {/* 麦克风按钮 */}
+                  <button
+                    onClick={handleToggleMic}
+                    className={`p-2.5 rounded-lg transition-colors ${
+                      isMicActive ? "bg-green-500 text-white" : "bg-gray-800 text-gray-400 hover:text-white"
+                    }`}
+                    title={isMicActive ? "关闭麦克风" : "开启麦克风"}
+                  >
+                    {isMicActive ? (
+                      <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z" />
+                      </svg>
+                    ) : (
+                      <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z" />
+                      </svg>
+                    )}
+                  </button>
+
+                  {/* 全屏切换按钮 */}
+                  <button
+                    onClick={toggleFullscreen}
+                    className="p-2.5 rounded-lg bg-gray-800 text-gray-400 hover:text-white transition-colors"
+                    title="退出全屏"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5l5.25 5.25" />
+                    </svg>
+                  </button>
+
+                  {/* 聊天面板切换按钮 */}
+                  {isInConversation && (
+                    <button
+                      onClick={toggleChatInFullscreen}
+                      className={`p-2.5 rounded-lg transition-colors ${
+                        showChatInFullscreen ? "bg-blue-500 text-white" : "bg-gray-800 text-gray-400 hover:text-white"
+                      }`}
+                      title={showChatInFullscreen ? "隐藏聊天" : "显示聊天"}
+                    >
+                      <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+
+                {/* 右侧：退出通话按钮 */}
+                <div className="flex items-center gap-3">
+                  {isInConversation && (
+                    <button
+                      onClick={handleEndCall}
+                      className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
+                    >
+                      <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08c-.18-.17-.29-.42-.29-.7 0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28-.79-.74-1.69-1.36-2.67-1.85-.33-.16-.56-.5-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z" />
+                      </svg>
+                      退出通话
+                    </button>
+                  )}
+                </div>
+                </div>
+              </div>
+            </>
+          ) : (
+            /* 非全屏模式：原有布局 */
+            <>
+              {/* 视频区域 */}
+              <div
+                className={`relative bg-black rounded-lg overflow-hidden ${
+                  isInConversation ? "flex-1" : "w-full"
+                }`}
+              >
+                <div className="relative w-full aspect-video">
+                  <VideoPlayer
+                    ref={videoPlayerRef}
+                    videoUrl={video.videoUrl}
+                    subtitles={subtitles}
+                    nodes={nodes}
+                    isInConversation={isInConversation}
+                    isFullscreen={isFullscreen}
+                    showChatInFullscreen={showChatInFullscreen}
+                    showSubtitles={showSubtitles}
+                    isMicActive={isMicActive}
+                    isAISpeaking={isAISpeaking}
+                    onToggleConversation={toggleConversation}
+                    onToggleFullscreen={toggleFullscreen}
+                    onToggleChat={toggleChatInFullscreen}
+                    onJoinMeeting={handleJoinMeeting}
+                    onContextUpdate={handleContextUpdate}
+                    onNodeComplete={handleNodeComplete}
+                  />
+                </div>
+              </div>
+
+              {/* 聊天面板 - 非全屏模式 */}
+              {isInConversation && (
+                <div className="w-[380px] shrink-0 h-[calc(100vw*9/16*0.65)] max-h-[500px] min-h-[400px]">
+                  <ChatPanel
+                    videoContext={videoContext.context || `正在观看：${video.title}`}
+                    currentSubtitle={videoContext.subtitle}
+                    isActive={isInConversation}
+                    videoId={videoId}
+                    currentTime={videoContext.currentTime}
+                    subtitles={subtitles}
+                    isFullscreen={isFullscreen}
+                    autoStart={autoStartMic}
+                    onToggle={toggleConversation}
+                    onClose={undefined}
+                    onPauseVideo={handlePauseVideo}
+                    onResumeVideo={handleResumeVideo}
+                    onJumpToTime={handleJumpToTime}
+                    onOpenDrawing={handleOpenDrawing}
+                    onCloseDrawing={handleCloseDrawing}
+                    onDrawShapes={handleDrawShapes}
+                    onClearDrawing={handleClearDrawing}
+                    onMicStatusChange={handleMicStatusChange}
+                    onAISpeakingChange={handleAISpeakingChange}
+                    onRegisterToggleMic={handleRegisterToggleMic}
+                  />
+                </div>
+              )}
+            </>
+          )}
+        </div>
 
         {/* Video Info */}
         <div className="mt-6 bg-gray-800 rounded-lg p-6">
@@ -374,7 +801,7 @@ export default function WatchPage() {
               <li>1. 点击右下角的「加入对话」按钮开始</li>
               <li>2. 开始说话时视频会自动暂停</li>
               <li>3. AI老师会用语音回答你的问题</li>
-              <li>4. 说"继续"或"明白了"视频会继续播放</li>
+              <li>4. 说&quot;继续&quot;或&quot;明白了&quot;视频会继续播放</li>
             </ul>
           </div>
         </div>
@@ -390,6 +817,13 @@ export default function WatchPage() {
           onContinue={handleGameContinue}
         />
       )}
+
+      {/* 画板覆盖层 */}
+      <DrawingOverlay
+        ref={drawingCanvasRef}
+        isOpen={isDrawingOpen}
+        onClose={handleCloseDrawing}
+      />
     </div>
   );
 }

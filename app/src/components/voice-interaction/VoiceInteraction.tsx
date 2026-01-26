@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { Whiteboard } from "@/components/whiteboard/Whiteboard";
 import { QuickIntents } from "@/components/voice-interaction/QuickIntents";
 import { useRealtimeVoice } from "@/hooks/useRealtimeVoice";
 import { useVoiceInteraction } from "@/hooks/voice";
 import { useDoubaoRealtimeVoice } from "@/hooks/voice/useDoubaoRealtimeVoice";
+import { DrawingShape } from "@/components/drawing-canvas";
 import katex from "katex";
 import "katex/dist/katex.min.css";
 
@@ -26,10 +27,22 @@ interface VoiceInteractionProps {
   currentTime?: number;          // 当前播放时间
   subtitles?: SubtitleCue[];     // 字幕列表，用于精准跳转
   voiceBackend?: VoiceBackendMode;  // 语音后端模式，默认 "doubao"
+  embedded?: boolean;            // 是否嵌入在 ChatPanel 中（隐藏外层边框和 header）
+  autoStart?: boolean;           // 是否自动开启麦克风（连接成功后自动请求权限）
   onToggle: () => void;
   onPauseVideo: () => void;
   onResumeVideo: () => void;
   onJumpToTime?: (time: number) => void;  // 跳转到指定时间
+  // Drawing board callbacks
+  onOpenDrawing?: () => void;
+  onCloseDrawing?: () => void;
+  onDrawShapes?: (shapes: DrawingShape[]) => void;
+  onClearDrawing?: () => void;
+  // Voice status callbacks
+  onMicStatusChange?: (active: boolean) => void;
+  onAISpeakingChange?: (speaking: boolean) => void;
+  // Mic toggle callback registration
+  onRegisterToggleMic?: (toggleFn: () => void) => void;
 }
 
 type InteractionStatus = "connecting" | "error" | "need_permission" | "listening" | "user_speaking" | "thinking" | "speaking";
@@ -134,10 +147,19 @@ export function VoiceInteraction({
   currentTime,
   subtitles,
   voiceBackend = "doubao_realtime",  // 默认使用豆包实时语音大模型
+  embedded = false,
+  autoStart = false,
   onToggle,
   onPauseVideo,
   onResumeVideo,
   onJumpToTime,
+  onOpenDrawing,
+  onCloseDrawing,
+  onDrawShapes,
+  onClearDrawing,
+  onMicStatusChange,
+  onAISpeakingChange,
+  onRegisterToggleMic,
 }: VoiceInteractionProps) {
   const [status, setStatus] = useState<InteractionStatus>("connecting");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -146,6 +168,7 @@ export function VoiceInteraction({
   const [permissionError, setPermissionError] = useState<string>("");
   const [pendingWhiteboard, setPendingWhiteboard] = useState<Message["whiteboard"] | null>(null);
   const [connectionError, setConnectionError] = useState<string>("");
+  const [textInput, setTextInput] = useState("");
 
   // 用于自动滚动
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -295,6 +318,43 @@ export function VoiceInteraction({
         lastWhiteboardRef.current = whiteboardData;
         setPendingWhiteboard(whiteboardData);
         console.log("pendingWhiteboardRef.current is now:", pendingWhiteboardRef.current);
+      }
+    } else if (tool === "use_drawing_board") {
+      // Handle drawing board tool
+      const p = params as {
+        action: "open" | "draw" | "clear" | "close";
+        shapes?: Array<{
+          type: "rectangle" | "ellipse" | "line" | "arrow" | "text" | "freehand";
+          x: number;
+          y: number;
+          width?: number;
+          height?: number;
+          points?: Array<{ x: number; y: number }>;
+          text?: string;
+          color?: string;
+        }>;
+      };
+
+      console.log("Drawing board action:", p.action, "shapes:", p.shapes);
+
+      switch (p.action) {
+        case "open":
+          onOpenDrawing?.();
+          if (p.shapes && p.shapes.length > 0) {
+            onDrawShapes?.(p.shapes as DrawingShape[]);
+          }
+          break;
+        case "draw":
+          if (p.shapes && p.shapes.length > 0) {
+            onDrawShapes?.(p.shapes as DrawingShape[]);
+          }
+          break;
+        case "clear":
+          onClearDrawing?.();
+          break;
+        case "close":
+          onCloseDrawing?.();
+          break;
       }
     }
   };
@@ -470,13 +530,23 @@ export function VoiceInteraction({
     }
   }, [isActive, isConnected]); // Add isConnected to properly track connection state
 
-  // 连接成功后显示需要权限
+  // 连接成功后显示需要权限或自动开始监听
   useEffect(() => {
     if (isConnected && isActive && !isListening) {
-      console.log("Connected, waiting for permission...");
-      setStatus("need_permission");
+      if (autoStart) {
+        // 自动开始监听
+        console.log("Connected, auto-starting listening...");
+        startListening().catch((err) => {
+          console.error("Auto-start listening failed:", err);
+          setPermissionError(err instanceof Error ? err.message : "无法访问麦克风");
+          setStatus("need_permission");
+        });
+      } else {
+        console.log("Connected, waiting for permission...");
+        setStatus("need_permission");
+      }
     }
-  }, [isConnected, isActive, isListening]);
+  }, [isConnected, isActive, isListening, autoStart, startListening]);
 
   // 监听开始后更新状态
   useEffect(() => {
@@ -486,8 +556,42 @@ export function VoiceInteraction({
     }
   }, [isListening]);
 
+  // 通知父组件麦克风状态变化
+  useEffect(() => {
+    onMicStatusChange?.(isListening);
+  }, [isListening, onMicStatusChange]);
+
+  // 通知父组件 AI 说话状态变化
+  useEffect(() => {
+    onAISpeakingChange?.(status === "speaking");
+  }, [status, onAISpeakingChange]);
+
   // Note: useVoiceInteraction hook handles its own cleanup on unmount
   // No need to call disconnect here - it causes issues with React Strict Mode
+
+  // 切换麦克风状态
+  const handleToggleMic = useCallback(async () => {
+    if (isListening) {
+      console.log("Stopping listening...");
+      stopListening();
+    } else {
+      console.log("Starting listening...");
+      setPermissionError("");
+      try {
+        await startListening();
+      } catch (error) {
+        console.error("Failed to start listening:", error);
+        setPermissionError(error instanceof Error ? error.message : "无法访问麦克风");
+      }
+    }
+  }, [isListening, startListening, stopListening]);
+
+  // 注册切换麦克风的回调给父组件
+  useEffect(() => {
+    if (onRegisterToggleMic && isConnected) {
+      onRegisterToggleMic(handleToggleMic);
+    }
+  }, [onRegisterToggleMic, handleToggleMic, isConnected]);
 
   // 请求麦克风权限并开始监听
   const handleStartListening = async () => {
@@ -507,6 +611,28 @@ export function VoiceInteraction({
     setStatus("thinking");
     onPauseVideo();
     sendTextMessage(prompt);
+  };
+
+  // 处理文字输入发送
+  const handleTextSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!textInput.trim()) return;
+
+    console.log("Text input submitted:", textInput);
+    // 添加用户消息到列表
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: `user-${Date.now()}`,
+        role: "user",
+        content: textInput,
+        timestamp: new Date(),
+      },
+    ]);
+    setStatus("thinking");
+    onPauseVideo();
+    sendTextMessage(textInput);
+    setTextInput("");
   };
 
   if (!isActive) {
@@ -552,26 +678,39 @@ export function VoiceInteraction({
   };
 
   return (
-    <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
-      {/* Header */}
-      <div className="px-4 py-3 border-b border-gray-700 flex items-center justify-between">
-        <div className="flex items-center gap-3">
+    <div className={embedded ? "h-full flex flex-col" : "bg-gray-800 rounded-lg border border-gray-700 overflow-hidden"}>
+      {/* Header - 仅在非嵌入模式下显示 */}
+      {!embedded && (
+        <div className="px-4 py-3 border-b border-gray-700 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className={`w-3 h-3 rounded-full animate-pulse ${getStatusColor()}`} />
+            <div>
+              <span className="text-white font-medium">AI 老师</span>
+              <span className="text-gray-400 text-sm ml-2">{getStatusText()}</span>
+            </div>
+          </div>
+          <button
+            onClick={onToggle}
+            className="text-gray-400 hover:text-white transition-colors px-3 py-1 rounded hover:bg-gray-700"
+          >
+            退出对话
+          </button>
+        </div>
+      )}
+
+      {/* 嵌入模式下的状态栏 */}
+      {embedded && (
+        <div className="px-4 py-2 border-b border-gray-700 flex items-center gap-3 shrink-0">
           <div className={`w-3 h-3 rounded-full animate-pulse ${getStatusColor()}`} />
           <div>
             <span className="text-white font-medium">AI 老师</span>
             <span className="text-gray-400 text-sm ml-2">{getStatusText()}</span>
           </div>
         </div>
-        <button
-          onClick={onToggle}
-          className="text-gray-400 hover:text-white transition-colors px-3 py-1 rounded hover:bg-gray-700"
-        >
-          退出对话
-        </button>
-      </div>
+      )}
 
       {/* Content */}
-      <div ref={messagesContainerRef} className="p-4 space-y-4 max-h-96 overflow-y-auto">
+      <div ref={messagesContainerRef} className={embedded ? "flex-1 p-4 space-y-4 overflow-y-auto" : "p-4 space-y-4 max-h-96 overflow-y-auto"}>
         {/* 需要麦克风权限 */}
         {status === "need_permission" && (
           <div className="text-center py-6">
@@ -714,6 +853,31 @@ export function VoiceInteraction({
         )}
 
       </div>
+
+      {/* 底部文字输入框 - 仅在连接成功后显示 */}
+      {embedded && isConnected && status !== "connecting" && status !== "error" && (
+        <form onSubmit={handleTextSubmit} className="p-3 border-t border-gray-700 shrink-0">
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={textInput}
+              onChange={(e) => setTextInput(e.target.value)}
+              placeholder="Type here..."
+              className="flex-1 bg-gray-700 text-white rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-gray-400"
+              disabled={status === "thinking" || status === "speaking"}
+            />
+            <button
+              type="submit"
+              disabled={!textInput.trim() || status === "thinking" || status === "speaking"}
+              className="bg-blue-500 hover:bg-blue-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white p-2 rounded-lg transition-colors"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+              </svg>
+            </button>
+          </div>
+        </form>
+      )}
     </div>
   );
 }

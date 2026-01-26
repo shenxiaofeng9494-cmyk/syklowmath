@@ -4,9 +4,11 @@ import { useEffect, useState, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import katex from "katex";
 import "katex/dist/katex.min.css";
-// @ts-expect-error - plotly.js-dist-min has no type declarations
-import Plotly from "plotly.js-dist-min";
 import * as math from "mathjs";
+
+// Plotly 类型定义
+type PlotlyType = typeof import("plotly.js-dist-min");
+let Plotly: PlotlyType | null = null;
 
 interface WhiteboardProps {
   type: "formula" | "graph";
@@ -56,20 +58,33 @@ export function Whiteboard({ type, content, steps, graphConfig }: WhiteboardProp
   return null;
 }
 
-// 解析数学表达式为 JavaScript 函数
-function parseExpression(expr: string, params: Array<{ name: string; value: number }> = []): ((x: number) => number) | null {
+// 常见的参数变量名及其默认值
+const COMMON_PARAMS: Record<string, { value: number; min: number; max: number; step: number }> = {
+  k: { value: 1, min: -5, max: 5, step: 0.5 },
+  a: { value: 1, min: -5, max: 5, step: 0.5 },
+  b: { value: 0, min: -5, max: 5, step: 0.5 },
+  c: { value: 0, min: -5, max: 5, step: 0.5 },
+  m: { value: 1, min: -5, max: 5, step: 0.5 },
+  n: { value: 0, min: -5, max: 5, step: 0.5 },
+};
+
+// 数学函数名，不应被识别为参数
+const MATH_FUNCTIONS = new Set([
+  "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+  "sinh", "cosh", "tanh", "asinh", "acosh", "atanh",
+  "sqrt", "cbrt", "abs", "sign", "floor", "ceil", "round",
+  "exp", "log", "log10", "log2", "ln",
+  "pow", "mod", "min", "max",
+]);
+
+// 从表达式中提取未声明的参数变量
+function extractParams(expr: string, declaredParams: string[]): Array<{ name: string; value: number; min: number; max: number; step: number }> {
   try {
-    // 移除 "y =" 或 "f(x) =" 前缀
-    const cleanExpr = expr
-      .replace(/^[yf]\s*\(?x?\)?\s*=\s*/i, "")
-      .trim();
-
+    let cleanExpr = expr.replace(/^[yf]\s*\(?x?\)?\s*=\s*/i, "").trim();
+    cleanExpr = preprocessExpression(cleanExpr);
     const node = math.parse(cleanExpr);
+    const foundParams: Array<{ name: string; value: number; min: number; max: number; step: number }> = [];
 
-    const paramNames = params.map((p) => p.name);
-
-    // 收集符号，排除自变量 x/t 和已声明参数
-    const symbols = new Set<string>();
     node.traverse((n) => {
       if (n.type === "SymbolNode") {
         const name = (n as math.SymbolNode).name;
@@ -78,19 +93,87 @@ function parseExpression(expr: string, params: Array<{ name: string; value: numb
           name !== "t" &&
           name !== "pi" &&
           name !== "e" &&
-          !paramNames.includes(name)
+          !MATH_FUNCTIONS.has(name) &&
+          !declaredParams.includes(name) &&
+          !foundParams.some((p) => p.name === name)
         ) {
-          symbols.add(name);
+          // 使用常见参数的默认值，或者使用通用默认值
+          const defaults = COMMON_PARAMS[name] || { value: 1, min: -5, max: 5, step: 0.5 };
+          foundParams.push({ name, ...defaults });
         }
       }
     });
 
-    // 如果存在除 x/t 以外的符号，视为非数值表达式，直接放弃
-    if (symbols.size > 0) {
-      console.warn("Expression contains symbolic parameters, skip:", expr);
-      return null;
-    }
+    return foundParams;
+  } catch {
+    return [];
+  }
+}
 
+// 预处理表达式：处理隐式乘法和特殊字符
+function preprocessExpression(expr: string): string {
+  let result = expr;
+
+  // 1. 转换上标符号为 ^ 形式
+  result = result
+    .replace(/²/g, "^2")
+    .replace(/³/g, "^3")
+    .replace(/⁴/g, "^4")
+    .replace(/⁻¹/g, "^(-1)")
+    .replace(/⁻²/g, "^(-2)");
+
+  // 2. 处理字母之间的隐式乘法（如 kx -> k*x, ax -> a*x）
+  // 匹配：字母后面紧跟字母（但不是函数名的一部分）
+  // 排除常见函数名：sin, cos, tan, log, exp, sqrt, abs, ln 等
+  const funcPattern = /\b(sin|cos|tan|asin|acos|atan|sinh|cosh|tanh|sqrt|cbrt|abs|sign|floor|ceil|round|exp|log|log10|log2|ln|pow|mod|min|max|pi)\b/gi;
+
+  // 先保护函数名，用不含字母的占位符替换
+  const placeholders: string[] = [];
+  result = result.replace(funcPattern, (match) => {
+    placeholders.push(match);
+    return `§${placeholders.length - 1}§`;
+  });
+
+  // 处理隐式乘法：
+  // - 字母后紧跟字母：ab -> a*b
+  // - 数字后紧跟字母：2x -> 2*x（mathjs 已支持，但为了一致性也处理）
+  // - 字母后紧跟数字：x2 -> x*2（不常见，但处理）
+  // - 右括号后紧跟字母或左括号：)x -> )*x, )( -> )*(
+  // - 字母或数字后紧跟左括号：x( -> x*(, 2( -> 2*(
+
+  // 字母后紧跟字母（单字母变量之间）
+  result = result.replace(/([a-zA-Z])([a-zA-Z])/g, "$1*$2");
+  // 可能需要多次处理（如 abc -> a*b*c）
+  result = result.replace(/([a-zA-Z])([a-zA-Z])/g, "$1*$2");
+
+  // 字母后紧跟左括号
+  result = result.replace(/([a-zA-Z])\(/g, "$1*(");
+
+  // 右括号后紧跟字母或左括号
+  result = result.replace(/\)([a-zA-Z])/g, ")*$1");
+  result = result.replace(/\)\(/g, ")*(");
+
+  // 数字后紧跟左括号
+  result = result.replace(/(\d)\(/g, "$1*(");
+
+  // 恢复函数名
+  result = result.replace(/§(\d+)§/g, (_, idx) => placeholders[parseInt(idx)]);
+
+  return result;
+}
+
+// 解析数学表达式为 JavaScript 函数
+function parseExpression(expr: string, params: Array<{ name: string; value: number }> = []): ((x: number) => number) | null {
+  try {
+    // 移除 "y =" 或 "f(x) =" 前缀
+    let cleanExpr = expr
+      .replace(/^[yf]\s*\(?x?\)?\s*=\s*/i, "")
+      .trim();
+
+    // 预处理表达式
+    cleanExpr = preprocessExpression(cleanExpr);
+
+    const node = math.parse(cleanExpr);
     const compiled = node.compile();
 
     const evaluate = (x: number) => {
@@ -145,14 +228,20 @@ function GraphDisplay({
   }>;
 }) {
   const [error, setError] = useState<string | null>(null);
-  const [paramValues, setParamValues] = useState<Record<string, number>>(() => {
-    const initial: Record<string, number> = {};
-    graphParams.forEach((p) => {
-      initial[p.name] = p.value ?? 0;
-    });
-    return initial;
-  });
+  const [plotlyLoaded, setPlotlyLoaded] = useState(false);
   const plotRef = useRef<HTMLDivElement>(null);
+
+  // 动态加载 Plotly（仅在客户端）
+  useEffect(() => {
+    if (typeof window !== "undefined" && !Plotly) {
+      import("plotly.js-dist-min").then((module) => {
+        Plotly = module.default;
+        setPlotlyLoaded(true);
+      });
+    } else if (Plotly) {
+      setPlotlyLoaded(true);
+    }
+  }, []);
 
   // 支持多个函数：用英文/中文逗号、分号或换行分隔
   const expressionList = useMemo(() => {
@@ -162,22 +251,66 @@ function GraphDisplay({
       .filter(Boolean);
   }, [expression]);
 
+  // 自动提取表达式中的参数变量，合并用户提供的参数
+  const allParams = useMemo(() => {
+    const declaredNames = graphParams.map((p) => p.name);
+    const autoParams: Array<{ name: string; value: number; min: number; max: number; step: number; label?: string }> = [];
+
+    for (const exp of expressionList) {
+      const extracted = extractParams(exp, declaredNames);
+      for (const p of extracted) {
+        if (!autoParams.some((ap) => ap.name === p.name)) {
+          autoParams.push(p);
+        }
+      }
+    }
+
+    // 合并：用户提供的参数优先
+    const merged = [
+      ...graphParams.map((p) => ({
+        name: p.name,
+        value: p.value,
+        min: p.min ?? -5,
+        max: p.max ?? 5,
+        step: p.step ?? 0.5,
+        label: p.label,
+      })),
+      ...autoParams,
+    ];
+
+    return merged;
+  }, [expressionList, graphParams]);
+
+  const [paramValues, setParamValues] = useState<Record<string, number>>(() => {
+    const initial: Record<string, number> = {};
+    allParams.forEach((p) => {
+      initial[p.name] = p.value ?? 0;
+    });
+    return initial;
+  });
+
   useEffect(() => {
     const initial: Record<string, number> = {};
-    graphParams.forEach((p) => {
+    allParams.forEach((p) => {
       initial[p.name] = p.value ?? 0;
     });
     setParamValues(initial);
-  }, [graphParams]);
+  }, [allParams]);
 
   useEffect(() => {
-    if (!plotRef.current) return;
+    if (!plotRef.current || !plotlyLoaded || !Plotly) return;
     if (expressionList.length === 0) {
       setError("未提供函数表达式，无法绘制图像");
       return;
     }
 
-    const traces: Plotly.Data[] = [];
+    // 等待参数初始化完成
+    if (allParams.length > 0 && Object.keys(paramValues).length === 0) {
+      return; // 参数还未初始化，等待下一次渲染
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const traces: any[] = [];
     const palette = ["#2563eb", "#f97316", "#10b981", "#ef4444", "#8b5cf6"];
     const [xmin, xmax] = xRange;
     const samples = 400;
@@ -259,7 +392,7 @@ function GraphDisplay({
       },
       { responsive: true },
     );
-  }, [expressionList, xRange, yRange, points, paramValues]);
+  }, [expressionList, xRange, yRange, points, paramValues, plotlyLoaded, allParams]);
 
   return (
     <motion.div
@@ -270,9 +403,9 @@ function GraphDisplay({
       <div className="text-center text-gray-600 text-sm mb-2 font-mono whitespace-pre-wrap">
         {expressionList.join("\n")}
       </div>
-      {graphParams.length > 0 && (
+      {allParams.length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
-          {graphParams.map((p) => {
+          {allParams.map((p) => {
             const min = p.min ?? -5;
             const max = p.max ?? 5;
             const step = p.step ?? 0.1;
