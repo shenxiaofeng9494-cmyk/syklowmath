@@ -39,18 +39,66 @@ export function getVideoById(id: string): Video | undefined {
   return videos.find((v) => v.id === id);
 }
 
-// 获取当前字幕上下文（前后30秒内的字幕）
+// 分层字幕上下文结构
+export interface LayeredSubtitleContext {
+  // 最近几秒的内容（学生说"这个"最可能指的内容）
+  recent: string;
+  // 背景上下文（更长时间窗口的内容）
+  background: string;
+  // 格式化后的完整上下文（用于传给AI）
+  formatted: string;
+}
+
+// 获取当前字幕上下文（分层：最近5秒精准 + 前30秒背景）
 export function getSubtitleContext(
   subtitles: SubtitleCue[],
   currentTime: number,
-  windowSeconds: number = 30
+  recentSeconds: number = 5,
+  backgroundSeconds: number = 30
 ): string {
-  const startTime = Math.max(0, currentTime - windowSeconds);
+  const layered = getLayeredSubtitleContext(subtitles, currentTime, recentSeconds, backgroundSeconds);
+  return layered.formatted;
+}
 
-  return subtitles
-    .filter((cue) => cue.start >= startTime && cue.start <= currentTime)
+// 获取分层字幕上下文
+export function getLayeredSubtitleContext(
+  subtitles: SubtitleCue[],
+  currentTime: number,
+  recentSeconds: number = 5,
+  backgroundSeconds: number = 30
+): LayeredSubtitleContext {
+  const recentStart = Math.max(0, currentTime - recentSeconds);
+  const backgroundStart = Math.max(0, currentTime - backgroundSeconds);
+
+  // 最近几秒的字幕（精准匹配"这个"）
+  const recentCues = subtitles
+    .filter((cue) => cue.start >= recentStart && cue.start <= currentTime)
     .map((cue) => cue.text)
     .join(" ");
+
+  // 背景上下文（排除最近几秒，避免重复）
+  const backgroundCues = subtitles
+    .filter((cue) => cue.start >= backgroundStart && cue.start < recentStart)
+    .map((cue) => cue.text)
+    .join(" ");
+
+  // 格式化输出
+  let formatted = "";
+
+  if (recentCues) {
+    formatted += `【刚才说的】（最近${recentSeconds}秒，学生说"这个"很可能指这里）\n${recentCues}`;
+  }
+
+  if (backgroundCues) {
+    if (formatted) formatted += "\n\n";
+    formatted += `【前面的内容】（背景信息）\n${backgroundCues}`;
+  }
+
+  return {
+    recent: recentCues,
+    background: backgroundCues,
+    formatted: formatted || "(暂无字幕内容)",
+  };
 }
 
 // 获取当前字幕

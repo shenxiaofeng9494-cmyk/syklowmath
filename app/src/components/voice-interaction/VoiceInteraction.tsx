@@ -6,12 +6,18 @@ import { QuickIntents } from "@/components/voice-interaction/QuickIntents";
 import { useRealtimeVoice } from "@/hooks/useRealtimeVoice";
 import { useVoiceInteraction } from "@/hooks/voice";
 import { useDoubaoRealtimeVoice } from "@/hooks/voice/useDoubaoRealtimeVoice";
+import { useDrawExplainVoice } from "@/hooks/voice/useDrawExplainVoice";
 import { DrawingShape } from "@/components/drawing-canvas";
+import { compileDSL, DSLScript } from "@/lib/whiteboard-dsl";
+import { VoiceMode, DrawExplainState, DrawExplainProgress, VoiceBackend } from "@/types/drawing-script";
 import katex from "katex";
 import "katex/dist/katex.min.css";
 
 // Voice backend mode: "openai" for OpenAI Realtime, "doubao" for ASR + LLM + TTS, "doubao_realtime" for Doubao S2S
-type VoiceBackendMode = "openai" | "doubao" | "doubao_realtime";
+type VoiceBackendMode = VoiceBackend | "openai";
+
+// Interaction status including draw_explain states
+type InteractionStatus = "connecting" | "error" | "need_permission" | "listening" | "user_speaking" | "thinking" | "speaking" | "generating" | "drawing";
 
 interface SubtitleCue {
   start: number;
@@ -29,6 +35,8 @@ interface VoiceInteractionProps {
   voiceBackend?: VoiceBackendMode;  // 语音后端模式，默认 "doubao"
   embedded?: boolean;            // 是否嵌入在 ChatPanel 中（隐藏外层边框和 header）
   autoStart?: boolean;           // 是否自动开启麦克风（连接成功后自动请求权限）
+  voiceMode?: VoiceMode;         // 语音交互模式：realtime 或 draw_explain
+  onVoiceModeChange?: (mode: VoiceMode) => void;  // 模式切换回调
   onToggle: () => void;
   onPauseVideo: () => void;
   onResumeVideo: () => void;
@@ -41,11 +49,7 @@ interface VoiceInteractionProps {
   // Voice status callbacks
   onMicStatusChange?: (active: boolean) => void;
   onAISpeakingChange?: (speaking: boolean) => void;
-  // Mic toggle callback registration
-  onRegisterToggleMic?: (toggleFn: () => void) => void;
 }
-
-type InteractionStatus = "connecting" | "error" | "need_permission" | "listening" | "user_speaking" | "thinking" | "speaking";
 
 interface Message {
   id: string;
@@ -91,7 +95,7 @@ function renderTextWithLatex(text: string): string {
   });
 }
 
-// 消息气泡组件
+// 消息气泡组件 - 简洁样式
 function MessageBubble({ message }: { message: Message }) {
   const isUser = message.role === "user";
 
@@ -99,30 +103,20 @@ function MessageBubble({ message }: { message: Message }) {
     return renderTextWithLatex(message.content);
   }, [message.content]);
 
-  useEffect(() => {
-    console.log("Render MessageBubble", {
-      id: message.id,
-      role: message.role,
-      hasWhiteboard: !!message.whiteboard,
-      whiteboard: message.whiteboard,
-    });
-  }, [message]);
-
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-      <div
-        className={`max-w-[85%] rounded-lg p-3 ${
-          isUser
-            ? "bg-blue-500 text-white"
-            : "bg-gray-700 text-white"
-        }`}
-      >
+    <div className={`flex flex-col gap-1.5 ${isUser ? "items-end" : "items-start"}`}>
+      {/* 发送者名称 */}
+      <span className={`text-[#888] text-sm ${isUser ? "pr-1" : "pl-1"}`}>
+        {isUser ? "You" : "AI老师"}
+      </span>
+      {/* 消息气泡 */}
+      <div className="max-w-[85%] rounded-2xl px-4 py-3 bg-[#2a2a2a] text-[#e8e8e8]">
         <div
-          className="whitespace-pre-wrap break-words"
+          className="whitespace-pre-wrap break-words text-[15px] leading-relaxed"
           dangerouslySetInnerHTML={{ __html: renderedContent }}
         />
         {message.whiteboard && (
-          <div className="mt-2">
+          <div className="mt-3">
             <Whiteboard
               type={message.whiteboard.type}
               content={message.whiteboard.content}
@@ -131,9 +125,6 @@ function MessageBubble({ message }: { message: Message }) {
             />
           </div>
         )}
-        <div className={`text-xs mt-1 ${isUser ? "text-blue-200" : "text-gray-400"}`}>
-          {message.timestamp.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
-        </div>
       </div>
     </div>
   );
@@ -149,6 +140,8 @@ export function VoiceInteraction({
   voiceBackend = "doubao_realtime",  // 默认使用豆包实时语音大模型
   embedded = false,
   autoStart = false,
+  voiceMode = "realtime",
+  onVoiceModeChange,
   onToggle,
   onPauseVideo,
   onResumeVideo,
@@ -159,7 +152,6 @@ export function VoiceInteraction({
   onClearDrawing,
   onMicStatusChange,
   onAISpeakingChange,
-  onRegisterToggleMic,
 }: VoiceInteractionProps) {
   const [status, setStatus] = useState<InteractionStatus>("connecting");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -169,6 +161,10 @@ export function VoiceInteraction({
   const [pendingWhiteboard, setPendingWhiteboard] = useState<Message["whiteboard"] | null>(null);
   const [connectionError, setConnectionError] = useState<string>("");
   const [textInput, setTextInput] = useState("");
+
+  // Draw-explain mode state
+  const [drawExplainState, setDrawExplainState] = useState<DrawExplainState>("idle");
+  const [drawExplainProgress, setDrawExplainProgress] = useState<DrawExplainProgress | null>(null);
 
   // 用于自动滚动
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -224,9 +220,9 @@ export function VoiceInteraction({
 
   const handleTranscript = (text: string, isFinal: boolean) => {
     console.log("Transcript:", text, "isFinal:", isFinal);
-    setCurrentTranscript(text);
     if (isFinal && text) {
-      // 添加用户消息到列表
+      // 最终结果：显示实际文本并添加到消息列表
+      setCurrentTranscript(text);
       setMessages((prev) => [
         ...prev,
         {
@@ -236,10 +232,14 @@ export function VoiceInteraction({
           timestamp: new Date(),
         },
       ]);
-      setCurrentTranscript("");
+      // 短暂延迟后清空，让用户看到最终结果
+      setTimeout(() => setCurrentTranscript(""), 300);
       // 清空回答准备接收新回答
       currentAnswerRef.current = "";
       setCurrentAnswer("");
+    } else if (!isFinal) {
+      // 中间结果：显示动态省略号，不显示可能不准确的中间文本
+      setCurrentTranscript("...");
     }
   };
 
@@ -356,6 +356,20 @@ export function VoiceInteraction({
           onCloseDrawing?.();
           break;
       }
+    } else if (tool === "use_whiteboard_dsl") {
+      // Handle DSL-based whiteboard tool
+      const p = params as unknown as DSLScript;
+      console.log("Whiteboard DSL commands:", p.commands);
+
+      // Compile DSL to shapes
+      const result = compileDSL(p);
+      if (result.success && result.shapes.length > 0) {
+        console.log("DSL compiled successfully, shapes:", result.shapes.length);
+        onOpenDrawing?.();
+        onDrawShapes?.(result.shapes);
+      } else if (result.errors) {
+        console.error("DSL compilation errors:", result.errors);
+      }
     }
   };
 
@@ -371,9 +385,14 @@ export function VoiceInteraction({
 
   const handleComplete = () => {
     console.log("Response complete, back to listening");
+    console.log("handleComplete - currentAnswerRef:", currentAnswerRef.current?.substring(0, 50));
+    console.log("handleComplete - pendingWhiteboardRef:", pendingWhiteboardRef.current);
+    console.log("handleComplete - lastWhiteboardRef:", lastWhiteboardRef.current);
+
     // 保存完整回答到消息列表
     if (currentAnswerRef.current) {
       const whiteboard = lastWhiteboardRef.current || pendingWhiteboardRef.current || undefined;
+      console.log("handleComplete - saving message with whiteboard:", whiteboard);
       setMessages((prev) => [
         ...prev,
         {
@@ -393,6 +412,7 @@ export function VoiceInteraction({
     // 如果还有未消耗的白板数据，补到最后一条助教消息上（避免时序问题丢失白板）
     if (pendingWhiteboardRef.current || lastWhiteboardRef.current) {
       const whiteboard = lastWhiteboardRef.current || pendingWhiteboardRef.current;
+      console.log("handleComplete - appending whiteboard to last message:", whiteboard);
       setMessages((prev) => {
         if (prev.length === 0) return prev;
         const last = prev[prev.length - 1];
@@ -413,12 +433,21 @@ export function VoiceInteraction({
     setStatus("listening");
   };
 
-  // OpenAI Realtime Voice hook (legacy)
-  const realtimeVoice = useRealtimeVoice({
-    videoContext,
-    videoId,
-    currentTime,
-    subtitles,
+  // Create no-op callbacks for disabled hooks to prevent them from triggering UI updates
+  const noopCallbacks = {
+    onSpeechStart: undefined,
+    onSpeechEnd: undefined,
+    onTranscript: undefined,
+    onAnswer: undefined,
+    onAnswerComplete: undefined,
+    onToolCall: undefined,
+    onResumeVideo: undefined,
+    onJumpToTime: undefined,
+    onComplete: undefined,
+  };
+
+  // Active callbacks only for the selected backend
+  const activeCallbacks = {
     onSpeechStart: handleSpeechStart,
     onSpeechEnd: handleSpeechEnd,
     onTranscript: handleTranscript,
@@ -428,6 +457,15 @@ export function VoiceInteraction({
     onResumeVideo: handleResumeVideo,
     onJumpToTime: handleJumpToTime,
     onComplete: handleComplete,
+  };
+
+  // OpenAI Realtime Voice hook (legacy)
+  const realtimeVoice = useRealtimeVoice({
+    videoContext,
+    videoId,
+    currentTime,
+    subtitles,
+    ...(voiceBackend === "openai" ? activeCallbacks : noopCallbacks),
   });
 
   // New three-stage voice hook (Doubao ASR + DeepSeek + Doubao TTS)
@@ -436,15 +474,7 @@ export function VoiceInteraction({
     videoId,
     currentTime,
     subtitles,
-    onSpeechStart: handleSpeechStart,
-    onSpeechEnd: handleSpeechEnd,
-    onTranscript: handleTranscript,
-    onAnswer: handleAnswer,
-    onAnswerComplete: handleAnswerComplete,
-    onToolCall: handleToolCall,
-    onResumeVideo: handleResumeVideo,
-    onJumpToTime: handleJumpToTime,
-    onComplete: handleComplete,
+    ...(voiceBackend === "doubao" ? activeCallbacks : noopCallbacks),
   });
 
   // Doubao Realtime (S2S) hook
@@ -453,15 +483,25 @@ export function VoiceInteraction({
     videoId,
     currentTime,
     subtitles,
-    onSpeechStart: handleSpeechStart,
-    onSpeechEnd: handleSpeechEnd,
-    onTranscript: handleTranscript,
-    onAnswer: handleAnswer,
-    onAnswerComplete: handleAnswerComplete,
-    onToolCall: handleToolCall,
-    onResumeVideo: handleResumeVideo,
-    onJumpToTime: handleJumpToTime,
-    onComplete: handleComplete,
+    ...(voiceBackend === "doubao_realtime" ? activeCallbacks : noopCallbacks),
+  });
+
+  // Draw-explain voice hook
+  const drawExplainVoice = useDrawExplainVoice({
+    videoContext,
+    videoId,
+    currentTime,
+    onOpenDrawing,
+    onCloseDrawing,
+    onDrawShapes,
+    onClearDrawing,
+    onStateChange: setDrawExplainState,
+    onProgressChange: setDrawExplainProgress,
+    onError: (error) => {
+      console.error("Draw-explain error:", error);
+      setConnectionError(error);
+      setStatus("error");
+    },
   });
 
   // Select the appropriate voice hook based on backend mode
@@ -531,22 +571,27 @@ export function VoiceInteraction({
   }, [isActive, isConnected]); // Add isConnected to properly track connection state
 
   // 连接成功后显示需要权限或自动开始监听
+  // 注意：边画边讲模式下不自动开启麦克风
   useEffect(() => {
     if (isConnected && isActive && !isListening) {
-      if (autoStart) {
-        // 自动开始监听
+      if (autoStart && voiceMode === "realtime") {
+        // 只在实时对话模式下自动开始监听
         console.log("Connected, auto-starting listening...");
         startListening().catch((err) => {
           console.error("Auto-start listening failed:", err);
           setPermissionError(err instanceof Error ? err.message : "无法访问麦克风");
           setStatus("need_permission");
         });
-      } else {
+      } else if (voiceMode === "realtime") {
         console.log("Connected, waiting for permission...");
         setStatus("need_permission");
+      } else {
+        // 边画边讲模式，直接进入 listening 状态（但不开启麦克风）
+        console.log("Connected in draw_explain mode, ready for text input");
+        setStatus("listening");
       }
     }
-  }, [isConnected, isActive, isListening, autoStart, startListening]);
+  }, [isConnected, isActive, isListening, autoStart, startListening, voiceMode]);
 
   // 监听开始后更新状态
   useEffect(() => {
@@ -563,35 +608,33 @@ export function VoiceInteraction({
 
   // 通知父组件 AI 说话状态变化
   useEffect(() => {
-    onAISpeakingChange?.(status === "speaking");
+    onAISpeakingChange?.(status === "speaking" || status === "drawing");
   }, [status, onAISpeakingChange]);
+
+  // Sync draw_explain state with status
+  useEffect(() => {
+    if (drawExplainState === "generating") {
+      setStatus("generating");
+    } else if (drawExplainState === "executing") {
+      setStatus("drawing");
+    } else if (drawExplainState === "completed") {
+      setStatus("listening");
+    } else if (drawExplainState === "error") {
+      setStatus("error");
+    }
+  }, [drawExplainState]);
+
+  // Connect draw_explain voice when in draw_explain mode
+  useEffect(() => {
+    if (voiceMode === "draw_explain" && isActive && !drawExplainVoice.isConnected) {
+      drawExplainVoice.connect().catch((err) => {
+        console.error("Draw-explain connect error:", err);
+      });
+    }
+  }, [voiceMode, isActive, drawExplainVoice]);
 
   // Note: useVoiceInteraction hook handles its own cleanup on unmount
   // No need to call disconnect here - it causes issues with React Strict Mode
-
-  // 切换麦克风状态
-  const handleToggleMic = useCallback(async () => {
-    if (isListening) {
-      console.log("Stopping listening...");
-      stopListening();
-    } else {
-      console.log("Starting listening...");
-      setPermissionError("");
-      try {
-        await startListening();
-      } catch (error) {
-        console.error("Failed to start listening:", error);
-        setPermissionError(error instanceof Error ? error.message : "无法访问麦克风");
-      }
-    }
-  }, [isListening, startListening, stopListening]);
-
-  // 注册切换麦克风的回调给父组件
-  useEffect(() => {
-    if (onRegisterToggleMic && isConnected) {
-      onRegisterToggleMic(handleToggleMic);
-    }
-  }, [onRegisterToggleMic, handleToggleMic, isConnected]);
 
   // 请求麦克风权限并开始监听
   const handleStartListening = async () => {
@@ -605,12 +648,29 @@ export function VoiceInteraction({
     }
   };
 
+  // 处理模式切换 - 切换到边画边讲时停止麦克风
+  const handleVoiceModeChange = useCallback((newMode: VoiceMode) => {
+    if (newMode === "draw_explain" && isListening) {
+      // 切换到边画边讲模式时，停止麦克风监听
+      console.log("Switching to draw_explain mode, stopping mic...");
+      stopListening();
+    }
+    onVoiceModeChange?.(newMode);
+  }, [isListening, stopListening, onVoiceModeChange]);
+
   // 处理快捷意图选择
   const handleQuickIntent = (prompt: string) => {
     console.log("Quick intent selected:", prompt);
-    setStatus("thinking");
-    onPauseVideo();
-    sendTextMessage(prompt);
+    if (voiceMode === "draw_explain") {
+      // In draw_explain mode, generate drawing script
+      setStatus("generating");
+      onPauseVideo();
+      drawExplainVoice.generate(prompt);
+    } else {
+      setStatus("thinking");
+      onPauseVideo();
+      sendTextMessage(prompt);
+    }
   };
 
   // 处理文字输入发送
@@ -629,9 +689,17 @@ export function VoiceInteraction({
         timestamp: new Date(),
       },
     ]);
-    setStatus("thinking");
-    onPauseVideo();
-    sendTextMessage(textInput);
+
+    if (voiceMode === "draw_explain") {
+      // In draw_explain mode, generate drawing script
+      setStatus("generating");
+      onPauseVideo();
+      drawExplainVoice.generate(textInput);
+    } else {
+      setStatus("thinking");
+      onPauseVideo();
+      sendTextMessage(textInput);
+    }
     setTextInput("");
   };
 
@@ -639,138 +707,73 @@ export function VoiceInteraction({
     return null;
   }
 
-  const getStatusText = () => {
-    switch (status) {
-      case "connecting":
-        return "连接中...";
-      case "error":
-        return "连接失败";
-      case "need_permission":
-        return "点击下方按钮开启麦克风";
-      case "listening":
-        return "等待你提问...";
-      case "user_speaking":
-        return "正在听你说话...";
-      case "thinking":
-        return "老师思考中...";
-      case "speaking":
-        return "老师回答中...";
-    }
-  };
-
-  const getStatusColor = () => {
-    switch (status) {
-      case "connecting":
-        return "bg-yellow-500";
-      case "error":
-        return "bg-red-500";
-      case "need_permission":
-        return "bg-orange-500";
-      case "listening":
-        return "bg-green-500";
-      case "user_speaking":
-        return "bg-red-500";
-      case "thinking":
-        return "bg-blue-500";
-      case "speaking":
-        return "bg-purple-500";
-    }
-  };
-
   return (
-    <div className={embedded ? "h-full flex flex-col" : "bg-gray-800 rounded-lg border border-gray-700 overflow-hidden"}>
-      {/* Header - 仅在非嵌入模式下显示 */}
+    <div className={embedded ? "h-full flex flex-col bg-[#1a1a1a]" : "bg-[#1a1a1a] rounded-2xl overflow-hidden shadow-lg"}>
+      {/* Header - 仅非嵌入模式显示 */}
       {!embedded && (
-        <div className="px-4 py-3 border-b border-gray-700 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className={`w-3 h-3 rounded-full animate-pulse ${getStatusColor()}`} />
-            <div>
-              <span className="text-white font-medium">AI 老师</span>
-              <span className="text-gray-400 text-sm ml-2">{getStatusText()}</span>
-            </div>
-          </div>
+        <div className="px-5 py-4 flex items-center justify-between">
+          <span className="text-white font-semibold text-lg tracking-tight">Chat Transcript</span>
           <button
             onClick={onToggle}
-            className="text-gray-400 hover:text-white transition-colors px-3 py-1 rounded hover:bg-gray-700"
+            className="text-gray-400 hover:text-white transition-colors p-1"
           >
-            退出对话
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
           </button>
         </div>
       )}
 
-      {/* 嵌入模式下的状态栏 */}
-      {embedded && (
-        <div className="px-4 py-2 border-b border-gray-700 flex items-center gap-3 shrink-0">
-          <div className={`w-3 h-3 rounded-full animate-pulse ${getStatusColor()}`} />
-          <div>
-            <span className="text-white font-medium">AI 老师</span>
-            <span className="text-gray-400 text-sm ml-2">{getStatusText()}</span>
-          </div>
-        </div>
-      )}
-
       {/* Content */}
-      <div ref={messagesContainerRef} className={embedded ? "flex-1 p-4 space-y-4 overflow-y-auto" : "p-4 space-y-4 max-h-96 overflow-y-auto"}>
+      <div ref={messagesContainerRef} className={embedded ? "flex-1 px-5 py-4 space-y-5 overflow-y-auto" : "px-5 py-4 space-y-5 max-h-96 overflow-y-auto"}>
         {/* 需要麦克风权限 */}
-        {status === "need_permission" && (
-          <div className="text-center py-6">
-            <div className="text-5xl mb-4">🎤</div>
-            <p className="text-white mb-4">点击按钮开启麦克风，开始和AI老师对话</p>
+        {status === "need_permission" && voiceMode === "realtime" && (
+          <div className="text-center py-8">
+            <p className="text-[#e8e8e8] mb-4">Click to enable microphone</p>
             {permissionError && (
               <p className="text-red-400 text-sm mb-4">{permissionError}</p>
             )}
             <button
               onClick={handleStartListening}
-              className="bg-blue-500 hover:bg-blue-600 text-white px-8 py-3 rounded-full text-lg font-medium transition-colors"
+              className="bg-[#333] hover:bg-[#444] text-white px-6 py-2.5 rounded-full text-sm transition-colors"
             >
-              开启麦克风
+              Enable Microphone
             </button>
-            <p className="text-gray-500 text-sm mt-4">
-              浏览器会弹出权限请求，请点击「允许」
-            </p>
           </div>
         )}
 
         {/* 连接中 */}
         {status === "connecting" && (
-          <div className="text-center py-6">
-            <svg className="animate-spin w-10 h-10 mx-auto text-blue-400 mb-4" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-            </svg>
-            <p className="text-gray-400">正在连接AI老师...</p>
+          <div className="text-center py-8">
+            <div className="flex justify-center mb-3">
+              <div className="w-2 h-2 bg-[#666] rounded-full animate-pulse mx-0.5" />
+              <div className="w-2 h-2 bg-[#666] rounded-full animate-pulse mx-0.5 animation-delay-150" />
+              <div className="w-2 h-2 bg-[#666] rounded-full animate-pulse mx-0.5 animation-delay-300" />
+            </div>
+            <p className="text-[#888] text-sm">Connecting...</p>
           </div>
         )}
 
         {/* 错误状态 */}
         {status === "error" && (
-          <div className="text-center py-6">
-            <div className="text-5xl mb-4">❌</div>
-            <p className="text-red-400 font-medium mb-2">连接失败</p>
-            <p className="text-gray-400 text-sm mb-4">{connectionError || "请检查网络连接"}</p>
+          <div className="text-center py-8">
+            <p className="text-red-400 mb-2">Connection failed</p>
+            <p className="text-[#666] text-sm mb-4">{connectionError || "Please check your network"}</p>
             <button
               onClick={() => {
                 setStatus("connecting");
                 connect();
               }}
-              className="bg-blue-500 hover:bg-blue-600 text-white px-6 py-2 rounded-full transition-colors"
+              className="bg-[#333] hover:bg-[#444] text-white px-6 py-2 rounded-full text-sm transition-colors"
             >
-              重试
+              Retry
             </button>
-          </div>
-        )}
-
-        {/* 当前视频内容 */}
-        {status !== "connecting" && status !== "need_permission" && status !== "error" && currentSubtitle && (
-          <div className="bg-gray-700/50 rounded-lg p-3">
-            <p className="text-xs text-gray-400 mb-1">当前内容：</p>
-            <p className="text-gray-200 text-sm">{currentSubtitle}</p>
           </div>
         )}
 
         {/* 对话历史 */}
         {messages.length > 0 && (
-          <div className="space-y-3">
+          <div className="space-y-5">
             {messages.map((message) => (
               <MessageBubble key={message.id} message={message} />
             ))}
@@ -779,24 +782,25 @@ export function VoiceInteraction({
 
         {/* 正在输入的用户问题 */}
         {currentTranscript && (
-          <div className="flex justify-end">
-            <div className="max-w-[85%] rounded-lg p-3 bg-blue-500/50 text-white border border-blue-400/50">
-              <p>{currentTranscript}</p>
-              <p className="text-xs text-blue-200 mt-1">正在听...</p>
+          <div className="flex flex-col gap-1.5 items-end">
+            <span className="text-[#888] text-sm pr-1">You</span>
+            <div className="max-w-[85%] rounded-2xl px-4 py-3 bg-[#2a2a2a] text-[#e8e8e8]">
+              <p className="text-[15px]">{currentTranscript}</p>
             </div>
           </div>
         )}
 
         {/* 正在生成的 AI 回答 */}
         {currentAnswer && (
-          <div className="flex justify-start">
-            <div className="max-w-[85%] rounded-lg p-3 bg-gray-700 text-white">
+          <div className="flex flex-col gap-1.5 items-start">
+            <span className="text-[#888] text-sm pl-1">AI老师</span>
+            <div className="max-w-[85%] rounded-2xl px-4 py-3 bg-[#2a2a2a] text-[#e8e8e8]">
               <div
-                className="whitespace-pre-wrap break-words"
+                className="whitespace-pre-wrap break-words text-[15px] leading-relaxed"
                 dangerouslySetInnerHTML={{ __html: renderTextWithLatex(currentAnswer) }}
               />
               {pendingWhiteboard && (
-                <div className="mt-2">
+                <div className="mt-3">
                   <Whiteboard
                     type={pendingWhiteboard.type}
                     content={pendingWhiteboard.content}
@@ -805,74 +809,105 @@ export function VoiceInteraction({
                   />
                 </div>
               )}
-              <p className="text-xs text-gray-400 mt-1">正在回答...</p>
             </div>
           </div>
         )}
 
-        {/* 等待提问状态 */}
-        {status === "listening" && messages.length === 0 && !currentTranscript && !currentAnswer && (
-          <div className="text-center py-4">
-            <div className="text-4xl mb-3 animate-pulse">🎧</div>
-            <p className="text-green-400 font-medium">麦克风已开启</p>
-            <p className="text-gray-400 mt-2">随时开口提问，或点击下方按钮</p>
+        {/* 思考中 */}
+        {status === "thinking" && !currentAnswer && (
+          <div className="flex flex-col gap-1.5 items-start">
+            <span className="text-[#888] text-sm pl-1">AI老师</span>
+            <div className="rounded-2xl px-4 py-3 bg-[#2a2a2a] inline-block">
+              <div className="flex items-center gap-1.5">
+                <div className="w-1.5 h-1.5 bg-[#666] rounded-full animate-pulse" />
+                <div className="w-1.5 h-1.5 bg-[#666] rounded-full animate-pulse" style={{ animationDelay: "0.15s" }} />
+                <div className="w-1.5 h-1.5 bg-[#666] rounded-full animate-pulse" style={{ animationDelay: "0.3s" }} />
+              </div>
+            </div>
           </div>
         )}
 
-        {/* 快捷意图按钮 - 在麦克风开启后显示 */}
-        {isListening && status !== "user_speaking" && status !== "thinking" && status !== "speaking" && (
-          <div className="pt-2 border-t border-gray-700">
+        {/* 用户正在说话 */}
+        {status === "user_speaking" && !currentTranscript && (
+          <div className="flex flex-col gap-1.5 items-end">
+            <span className="text-[#888] text-sm pr-1">You</span>
+            <div className="rounded-2xl px-4 py-3 bg-[#2a2a2a] inline-block">
+              <div className="flex items-center gap-1.5">
+                <div className="w-1.5 h-1.5 bg-[#666] rounded-full animate-pulse" />
+                <div className="w-1.5 h-1.5 bg-[#666] rounded-full animate-pulse" style={{ animationDelay: "0.15s" }} />
+                <div className="w-1.5 h-1.5 bg-[#666] rounded-full animate-pulse" style={{ animationDelay: "0.3s" }} />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 生成绘图脚本中 */}
+        {status === "generating" && (
+          <div className="flex flex-col gap-1.5 items-start">
+            <span className="text-[#888] text-sm pl-1">AI老师</span>
+            <div className="rounded-2xl px-4 py-3 bg-[#2a2a2a] text-[#888] text-sm">
+              Preparing drawing explanation...
+            </div>
+          </div>
+        )}
+
+        {/* 边画边讲进度 */}
+        {status === "drawing" && drawExplainProgress && (
+          <div className="flex flex-col gap-1.5 items-start">
+            <span className="text-[#888] text-sm pl-1">AI老师</span>
+            <div className="rounded-2xl px-4 py-3 bg-[#2a2a2a] min-w-[200px]">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[#e8e8e8] text-sm">Drawing & Explaining</span>
+                <button
+                  onClick={() => drawExplainVoice.stop()}
+                  className="text-[#888] hover:text-white text-xs"
+                >
+                  Stop
+                </button>
+              </div>
+              <div className="w-full bg-[#444] rounded-full h-1">
+                <div
+                  className="bg-[#888] h-1 rounded-full transition-all duration-300"
+                  style={{
+                    width: `${((drawExplainProgress.currentStepIndex + 1) / drawExplainProgress.totalSteps) * 100}%`,
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 快捷意图按钮 */}
+        {((voiceMode === "realtime" && isListening) || voiceMode === "draw_explain") &&
+         status !== "user_speaking" && status !== "thinking" && status !== "speaking" && status !== "generating" && status !== "drawing" && (
+          <div className="pt-3">
             <QuickIntents
               currentSubtitle={currentSubtitle}
               onSelect={handleQuickIntent}
             />
           </div>
         )}
-
-        {/* 用户正在说话（无转写时） */}
-        {status === "user_speaking" && !currentTranscript && (
-          <div className="text-center py-4">
-            <div className="text-3xl mb-2 animate-bounce">🎙️</div>
-            <p className="text-red-400 font-medium">正在听你说话...</p>
-          </div>
-        )}
-
-        {/* 思考中 */}
-        {status === "thinking" && !currentAnswer && (
-          <div className="flex justify-start">
-            <div className="rounded-lg p-3 bg-gray-700 text-white">
-              <div className="flex items-center gap-2">
-                <svg className="animate-spin w-4 h-4 text-blue-400" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                </svg>
-                <span className="text-gray-400">老师正在思考...</span>
-              </div>
-            </div>
-          </div>
-        )}
-
       </div>
 
-      {/* 底部文字输入框 - 仅在连接成功后显示 */}
+      {/* 底部文字输入框 */}
       {embedded && isConnected && status !== "connecting" && status !== "error" && (
-        <form onSubmit={handleTextSubmit} className="p-3 border-t border-gray-700 shrink-0">
-          <div className="flex items-center gap-2">
+        <form onSubmit={handleTextSubmit} className="px-4 py-4 shrink-0">
+          <div className="flex items-center gap-3 bg-[#2a2a2a] rounded-full px-4 py-2">
             <input
               type="text"
               value={textInput}
               onChange={(e) => setTextInput(e.target.value)}
               placeholder="Type here..."
-              className="flex-1 bg-gray-700 text-white rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder-gray-400"
-              disabled={status === "thinking" || status === "speaking"}
+              className="flex-1 bg-transparent text-[#e8e8e8] text-[15px] focus:outline-none placeholder-[#666]"
+              disabled={status === "thinking" || status === "speaking" || status === "generating" || status === "drawing"}
             />
             <button
               type="submit"
-              disabled={!textInput.trim() || status === "thinking" || status === "speaking"}
-              className="bg-blue-500 hover:bg-blue-600 disabled:bg-gray-600 disabled:cursor-not-allowed text-white p-2 rounded-lg transition-colors"
+              disabled={!textInput.trim() || status === "thinking" || status === "speaking" || status === "generating" || status === "drawing"}
+              className="text-[#666] hover:text-[#888] disabled:text-[#444] disabled:cursor-not-allowed transition-colors"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
               </svg>
             </button>
           </div>

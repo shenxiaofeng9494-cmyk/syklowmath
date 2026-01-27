@@ -64,12 +64,12 @@ async function getAllVideos(): Promise<Video[]> {
 export default async function Home() {
   const videos = await getAllVideos()
   return (
-    <div className="min-h-screen bg-gradient-to-b from-blue-50 to-white">
+    <div className="min-h-screen bg-background">
       {/* Header */}
-      <header className="border-b bg-white/80 backdrop-blur-sm sticky top-0 z-10">
+      <header className="border-b border-border bg-card/80 backdrop-blur-sm sticky top-0 z-10">
         <div className="max-w-6xl mx-auto px-4 py-4">
-          <h1 className="text-2xl font-bold text-blue-600">MathTalkTV</h1>
-          <p className="text-sm text-gray-500">对话式数学视频学习平台</p>
+          <h1 className="text-2xl font-bold text-blue-400">MathTalkTV</h1>
+          <p className="text-sm text-muted-foreground">对话式数学视频学习平台</p>
         </div>
       </header>
 
@@ -77,24 +77,24 @@ export default async function Home() {
       <main className="max-w-6xl mx-auto px-4 py-8">
         {/* Hero Section */}
         <section className="text-center mb-12">
-          <h2 className="text-4xl font-bold text-gray-900 mb-4">
+          <h2 className="text-4xl font-bold text-foreground mb-4">
             看视频学数学，随时提问
           </h2>
-          <p className="text-xl text-gray-600 max-w-2xl mx-auto">
+          <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
             遇到不懂的地方？暂停视频，用语音提问，AI老师立刻为你解答
           </p>
         </section>
 
         {/* Video List */}
         <section>
-          <h3 className="text-2xl font-semibold text-gray-800 mb-6">
+          <h3 className="text-2xl font-semibold text-foreground mb-6">
             开始学习
           </h3>
 
           {videos.length === 0 ? (
-            <div className="text-center py-12 bg-white rounded-lg border-2 border-dashed">
-              <p className="text-gray-500 mb-4">暂无视频</p>
-              <p className="text-sm text-gray-400">
+            <div className="text-center py-12 bg-card rounded-lg border-2 border-dashed border-border">
+              <p className="text-muted-foreground mb-4">暂无视频</p>
+              <p className="text-sm text-muted-foreground">
                 请将视频文件放到 public/videos/ 目录
               </p>
             </div>
@@ -104,19 +104,19 @@ export default async function Home() {
                 <Link key={video.id} href={`/watch/${video.id}`}>
                   <Card className="hover:shadow-lg transition-shadow cursor-pointer h-full">
                     {/* Video Thumbnail Placeholder */}
-                    <div className="aspect-video bg-gradient-to-br from-blue-100 to-blue-200 rounded-t-lg flex items-center justify-center">
-                      <div className="text-6xl">📐</div>
+                    <div className="aspect-video bg-gradient-to-br from-slate-800 to-slate-900 rounded-t-lg flex items-center justify-center">
+                      <div className="text-6xl opacity-60">📐</div>
                     </div>
                     <CardHeader>
                       <CardTitle className="text-lg">{video.title}</CardTitle>
                       <CardDescription className="flex items-center gap-2">
-                        <span className="text-blue-600">{video.teacher}</span>
+                        <span className="text-blue-400">{video.teacher}</span>
                         <span>·</span>
                         <span>{Math.floor(video.duration / 60)}分钟</span>
                       </CardDescription>
                     </CardHeader>
                     <CardContent>
-                      <p className="text-sm text-gray-600 line-clamp-2">
+                      <p className="text-sm text-muted-foreground line-clamp-2">
                         {video.description}
                       </p>
                     </CardContent>
@@ -132,21 +132,21 @@ export default async function Home() {
           <div className="text-center p-6">
             <div className="text-4xl mb-4">🎤</div>
             <h4 className="font-semibold text-lg mb-2">语音提问</h4>
-            <p className="text-gray-600 text-sm">
+            <p className="text-muted-foreground text-sm">
               看视频时随时暂停，用语音提出你的疑问
             </p>
           </div>
           <div className="text-center p-6">
             <div className="text-4xl mb-4">🤖</div>
             <h4 className="font-semibold text-lg mb-2">AI即时回答</h4>
-            <p className="text-gray-600 text-sm">
+            <p className="text-muted-foreground text-sm">
               AI老师用语音回答，就像真人老师在旁边
             </p>
           </div>
           <div className="text-center p-6">
             <div className="text-4xl mb-4">📝</div>
             <h4 className="font-semibold text-lg mb-2">画板演示</h4>
-            <p className="text-gray-600 text-sm">
+            <p className="text-muted-foreground text-sm">
               AI可以在画板上写公式、画图形，帮你理解
             </p>
           </div>
@@ -154,7 +154,7 @@ export default async function Home() {
       </main>
 
       {/* Footer */}
-      <footer className="border-t mt-16 py-8 text-center text-gray-500 text-sm">
+      <footer className="border-t border-border mt-16 py-8 text-center text-muted-foreground text-sm">
         <p>MathTalkTV MVP - 对话式数学视频学习平台</p>
       </footer>
     </div>

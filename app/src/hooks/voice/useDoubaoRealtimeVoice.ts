@@ -64,6 +64,7 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
   const currentUserMessageRef = useRef("");
   const sessionConfigRef = useRef<SessionConfig | null>(null);
   const toolDetectionTriggeredRef = useRef(false); // Prevent duplicate detection
+  const disconnectingRef = useRef(false); // Prevent audio enqueue during disconnect
 
   useEffect(() => {
     optionsRef.current = options;
@@ -98,6 +99,9 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
             optionsRef.current.onResumeVideo?.();
           } else if (call.name === "use_whiteboard") {
             console.log("Calling onToolCall for whiteboard");
+            optionsRef.current.onToolCall?.(call.name, call.arguments, call.id || "deepseek-" + Date.now());
+          } else if (call.name === "use_drawing_board") {
+            console.log("Calling onToolCall for drawing board");
             optionsRef.current.onToolCall?.(call.name, call.arguments, call.id || "deepseek-" + Date.now());
           } else if (call.name === "jump_to_video_node") {
             const query = call.arguments?.query as string;
@@ -264,7 +268,8 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
           break;
         }
         case EVENTS.TTS_RESPONSE: {
-          if (event.audioBase64) {
+          // Skip audio enqueue if disconnecting to prevent audio playing after exit
+          if (event.audioBase64 && !disconnectingRef.current) {
             const audioBuffer = Uint8Array.from(atob(event.audioBase64), (c) => c.charCodeAt(0)).buffer;
             playback.enqueue(audioBuffer);
           }
@@ -359,6 +364,14 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
     },
   });
 
+  // Store capture functions in refs to ensure stable references for callbacks
+  const captureStartRef = useRef(capture.start);
+  const captureStopRef = useRef(capture.stop);
+  useEffect(() => {
+    captureStartRef.current = capture.start;
+    captureStopRef.current = capture.stop;
+  }, [capture.start, capture.stop]);
+
   const connect = useCallback(async () => {
     if (sessionIdRef.current) {
       return;
@@ -415,6 +428,12 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
   }, [pollEvents]);
 
   const disconnect = useCallback(async () => {
+    // Set disconnecting flag first to prevent any new audio from being enqueued
+    disconnectingRef.current = true;
+
+    // Clear playback immediately to stop any ongoing audio
+    playback.clear();
+
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = null;
@@ -439,12 +458,16 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
     audioQueueRef.current = [];
     sendingRef.current = false;
 
-    capture.stop();
+    captureStopRef.current();
+    // Clear playback again in case any audio was enqueued during the async operations
     playback.clear();
 
     setIsConnected(false);
     setIsListening(false);
-  }, [capture, playback]);
+
+    // Reset disconnecting flag for potential reconnection
+    disconnectingRef.current = false;
+  }, [playback]);
 
   const startListening = useCallback(async () => {
     if (!isConnected) {
@@ -452,14 +475,15 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
       return;
     }
 
-    await capture.start();
+    await captureStartRef.current();
     setIsListening(true);
-  }, [isConnected, capture]);
+  }, [isConnected]);
 
   const stopListening = useCallback(() => {
-    capture.stop();
+    console.log("useDoubaoRealtimeVoice stopListening called");
+    captureStopRef.current();
     setIsListening(false);
-  }, [capture]);
+  }, []);
 
   const sendTextMessage = useCallback(async (text: string) => {
     if (!isConnected || !sessionIdRef.current) {

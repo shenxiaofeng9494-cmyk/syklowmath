@@ -123,3 +123,71 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* ========================================
+   游戏化 UI 样式 - MathTalkTV
+   ======================================== */
+
+/* 游戏化配色变量 */
+:root {
+  --color-playful-coral: #FF6B6B;
+  --color-playful-teal: #4ECDC4;
+  --color-playful-yellow: #FFE66D;
+  --color-panel-dark: #242640;
+  --color-bg-dark: #1A1B2E;
+  --shadow-fun: 0 4px 0 0 rgba(0,0,0,0.15);
+  --shadow-glow: 0 0 20px rgba(78, 205, 196, 0.3);
+}
+
+/* 条纹进度条动画 */
+@keyframes progress-stripe {
+  from { background-position: 1rem 0; }
+  to { background-position: 0 0; }
+}
+
+.progress-striped {
+  background-image: linear-gradient(
+    45deg,
+    rgba(255,255,255,.15) 25%,
+    transparent 25%,
+    transparent 50%,
+    rgba(255,255,255,.15) 50%,
+    rgba(255,255,255,.15) 75%,
+    transparent 75%,
+    transparent
+  );
+  background-size: 1rem 1rem;
+  animation: progress-stripe 1s linear infinite;
+}
+
+/* 3D 按钮效果 */
+.btn-3d {
+  box-shadow: 0 4px 0 0 rgba(0,0,0,0.2);
+  transition: all 0.1s ease;
+}
+.btn-3d:active {
+  box-shadow: none;
+  transform: translateY(4px);
+}
+
+/* 发光效果 */
+.glow-teal {
+  box-shadow: 0 0 20px rgba(78, 205, 196, 0.3);
+}
+
+/* 渐变边框效果 */
+.gradient-border {
+  position: relative;
+}
+.gradient-border::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 2px;
+  background: linear-gradient(135deg, #4ECDC4, #FF6B6B);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}

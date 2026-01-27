@@ -189,6 +189,7 @@ export function useAudioCapture(options: UseAudioCaptureOptions): UseAudioCaptur
   };
 
   const stop = useCallback(() => {
+    console.log("useAudioCapture stop called, isCapturing:", isCapturing);
     // Only log if actually capturing
     if (mediaStreamRef.current || workletNodeRef.current || audioContextRef.current) {
       console.log("Stopping audio capture...");

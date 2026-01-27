@@ -398,9 +398,9 @@ function GraphDisplay({
     <motion.div
       initial={{ opacity: 0, scale: 0.95 }}
       animate={{ opacity: 1, scale: 1 }}
-      className="bg-white rounded-lg p-2 overflow-hidden"
+      className="bg-gray-800 rounded-2xl p-3 overflow-hidden shadow-lg border border-gray-700"
     >
-      <div className="text-center text-gray-600 text-sm mb-2 font-mono whitespace-pre-wrap">
+      <div className="text-center text-gray-300 text-sm mb-2 font-mono whitespace-pre-wrap">
         {expressionList.join("\n")}
       </div>
       {allParams.length > 0 && (
@@ -411,8 +411,8 @@ function GraphDisplay({
             const step = p.step ?? 0.1;
             const value = paramValues[p.name] ?? p.value ?? 0;
             return (
-              <div key={p.name} className="flex items-center gap-2 text-sm text-gray-700">
-                <span className="w-12 text-right text-gray-600">{p.label || p.name}:</span>
+              <div key={p.name} className="flex items-center gap-2 text-sm text-gray-300">
+                <span className="w-12 text-right text-gray-400">{p.label || p.name}:</span>
                 <input
                   type="range"
                   min={min}
@@ -435,7 +435,7 @@ function GraphDisplay({
                     const v = Number(e.target.value);
                     setParamValues((prev) => ({ ...prev, [p.name]: v }));
                   }}
-                  className="w-16 border border-gray-300 rounded px-1 py-0.5 text-gray-800"
+                  className="w-16 border border-gray-600 bg-gray-700 rounded px-1 py-0.5 text-gray-200"
                 />
               </div>
             );
@@ -460,7 +460,23 @@ function FormulaDisplay({ latex }: { latex: string }) {
 
   useEffect(() => {
     try {
-      const rendered = katex.renderToString(latex, {
+      // 处理包含 $...$ 的混合内容
+      // 如果内容包含 $，则提取 $ 之间的 LaTeX 代码
+      let cleanLatex = latex;
+
+      // 检查是否包含 $...$ 格式
+      const dollarMatch = latex.match(/\$([^$]+)\$/);
+      if (dollarMatch) {
+        // 提取第一个 $...$ 之间的内容
+        cleanLatex = dollarMatch[1];
+      }
+
+      // 去掉可能的前后空格
+      cleanLatex = cleanLatex.trim();
+
+      console.log("FormulaDisplay rendering:", { original: latex, cleaned: cleanLatex });
+
+      const rendered = katex.renderToString(cleanLatex, {
         throwOnError: false,
         displayMode: true,
       });
@@ -484,10 +500,10 @@ function FormulaDisplay({ latex }: { latex: string }) {
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      className="bg-slate-100 border border-gray-300 rounded-lg p-4"
+      className="bg-gray-800 border border-[#4ECDC4]/30 rounded-2xl p-4 shadow-lg"
     >
       <div
-        className="text-center text-xl overflow-x-auto text-gray-900"
+        className="text-center text-xl overflow-x-auto text-gray-100"
         dangerouslySetInnerHTML={{ __html: html }}
       />
     </motion.div>
@@ -514,8 +530,8 @@ function StepByStepFormula({ steps }: { steps: string[] }) {
   }, [steps.length]);
 
   return (
-    <div className="bg-gray-900 border border-gray-600 rounded-lg p-4 space-y-3">
-      <div className="flex items-center gap-2 text-gray-400 text-sm">
+    <div className="bg-[#242640] border border-[#4ECDC4]/30 rounded-2xl p-4 space-y-3 shadow-lg">
+      <div className="flex items-center gap-2 text-[#4ECDC4] text-sm">
         <span>📝</span>
         <span>推导过程</span>
       </div>

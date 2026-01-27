@@ -1,8 +1,9 @@
 "use client";
 
-import { X, MessageSquare } from "lucide-react";
+import { X } from "lucide-react";
 import { VoiceInteraction } from "@/components/voice-interaction/VoiceInteraction";
 import { DrawingShape } from "@/components/drawing-canvas";
+import { VoiceMode, VoiceBackend } from "@/types/drawing-script";
 
 interface SubtitleCue {
   start: number;
@@ -18,22 +19,22 @@ interface ChatPanelProps {
   currentTime?: number;
   subtitles?: SubtitleCue[];
   isFullscreen?: boolean;
-  autoStart?: boolean;  // 是否自动开启麦克风
+  autoStart?: boolean;
+  voiceMode?: VoiceMode;
+  voiceBackend?: VoiceBackend;
+  onVoiceModeChange?: (mode: VoiceMode) => void;
+  onVoiceBackendChange?: (backend: VoiceBackend) => void;
   onToggle: () => void;
   onClose?: () => void;
   onPauseVideo: () => void;
   onResumeVideo: () => void;
   onJumpToTime?: (time: number) => void;
-  // Drawing board callbacks
   onOpenDrawing?: () => void;
   onCloseDrawing?: () => void;
   onDrawShapes?: (shapes: DrawingShape[]) => void;
   onClearDrawing?: () => void;
-  // Voice status callbacks
   onMicStatusChange?: (active: boolean) => void;
   onAISpeakingChange?: (speaking: boolean) => void;
-  // Mic toggle callback registration
-  onRegisterToggleMic?: (toggleFn: () => void) => void;
 }
 
 export function ChatPanel({
@@ -45,6 +46,10 @@ export function ChatPanel({
   subtitles,
   isFullscreen = false,
   autoStart = false,
+  voiceMode = "realtime",
+  voiceBackend = "doubao_realtime",
+  onVoiceModeChange,
+  onVoiceBackendChange,
   onToggle,
   onClose,
   onPauseVideo,
@@ -56,21 +61,26 @@ export function ChatPanel({
   onClearDrawing,
   onMicStatusChange,
   onAISpeakingChange,
-  onRegisterToggleMic,
 }: ChatPanelProps) {
   return (
-    <div className="h-full flex flex-col bg-gray-800 rounded-lg overflow-hidden">
+    <div className="h-full flex flex-col bg-[#1a1a1a] rounded-2xl overflow-hidden">
       {/* Header */}
-      <div className="px-4 py-3 border-b border-gray-700 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-2">
-          <MessageSquare className="w-5 h-5 text-blue-400" />
-          <span className="text-white font-medium">Chat Transcript</span>
+      <div className="px-5 py-4 flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-3">
+          <span className="text-white font-semibold text-lg tracking-tight">Chat</span>
+          {/* Voice Backend Indicator */}
+          <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+            voiceBackend === "doubao_realtime"
+              ? "bg-[#4ECDC4]/20 text-[#4ECDC4]"
+              : "bg-[#FF6B6B]/20 text-[#FF6B6B]"
+          }`}>
+            {voiceBackend === "doubao_realtime" ? "实时模式" : "精准模式"}
+          </span>
         </div>
         {isFullscreen && onClose && (
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-white transition-colors p-1 rounded hover:bg-gray-700"
-            title="关闭聊天"
+            className="text-gray-400 hover:text-white transition-colors p-1"
           >
             <X className="w-5 h-5" />
           </button>
@@ -86,6 +96,9 @@ export function ChatPanel({
           videoId={videoId}
           currentTime={currentTime}
           subtitles={subtitles}
+          voiceBackend={voiceBackend}
+          voiceMode={voiceMode}
+          onVoiceModeChange={onVoiceModeChange}
           onToggle={onToggle}
           onPauseVideo={onPauseVideo}
           onResumeVideo={onResumeVideo}
@@ -96,7 +109,6 @@ export function ChatPanel({
           onClearDrawing={onClearDrawing}
           onMicStatusChange={onMicStatusChange}
           onAISpeakingChange={onAISpeakingChange}
-          onRegisterToggleMic={onRegisterToggleMic}
           embedded={true}
           autoStart={autoStart}
         />

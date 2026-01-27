@@ -33,6 +33,7 @@ export interface NodeSegment {
   description: string
   keyConcepts: string[]  // 关键概念
   nodeType: 'intro' | 'concept' | 'example' | 'pitfall' | 'summary' | 'other'
+  testablePoint: string  // 这个节点可以测试什么
 }
 
 export interface SegmentationResult {
@@ -47,6 +48,7 @@ interface LLMNodeAnalysis {
   nodeType: 'intro' | 'concept' | 'example' | 'pitfall' | 'summary' | 'other'
   startText: string  // 节点开始的文字（用于定位）
   endText: string    // 节点结束的文字（用于定位）
+  testablePoint: string  // 这个节点可以测试什么
 }
 
 interface LLMAnalysisResult {
@@ -58,19 +60,30 @@ interface LLMAnalysisResult {
  * 构建分析 prompt
  */
 function buildAnalysisPrompt(fullText: string): string {
-  return `你是初中数学教学视频分析专家。请仔细阅读以下视频字幕全文，将其切分成知识点节点。
+  return `你是初中数学教学视频分析专家。请仔细阅读以下视频字幕全文，将其切分成**可测试的知识点节点**。
+
+## 核心目标
+系统会在每个节点结束时自动暂停视频，向学生推送一道测验题或小游戏，考察学生对该节点内容的掌握情况。因此，每个节点必须是一个**独立的、可验证的知识点**。
 
 ## 切分原则
-1. **按教学逻辑切分**：每个节点应该是一个相对完整的教学单元
-2. **节点类型包括**：
-   - intro: 引入/背景介绍
-   - concept: 概念讲解/定义说明
-   - example: 例题演示/练习
-   - pitfall: 易错点分析/注意事项
-   - summary: 总结/回顾
+1. **按可测试的知识点切分**：每个节点讲完后，必须能出一道题来验证学生是否掌握
+2. **一个节点 = 一个知识点**：
+   - ✅ 好的切分：「一元二次方程的定义」「求根公式的推导」「判别式的含义」分成 3 个节点
+   - ❌ 不好的切分：把上述内容合并成「一元二次方程」1 个大节点
+3. **宁细勿粗**：如果一段内容包含多个可测试的点，应该拆分成多个节点
+4. **节点类型**：
+   - intro: 引入/背景介绍（可测试：理解问题背景）
+   - concept: 概念讲解/定义说明（可测试：概念理解）
+   - example: 例题演示/练习（可测试：方法应用）
+   - pitfall: 易错点分析/注意事项（可测试：避坑能力）
+   - summary: 总结/回顾（可测试：综合理解）
    - other: 其他
-3. **不要机械地按时长切分**：根据内容的逻辑完整性来划分，一个节点可长可短
-4. **保持语义完整**：不要把一句话切成两半
+5. **保持语义完整**：不要把一句话切成两半
+
+## 什么是"可测试"？
+- 能出选择题、填空题、判断题
+- 能设计一个简单的互动游戏来验证
+- 学生看完这个节点后，应该能回答"这个节点教了我什么"
 
 ## 字幕全文
 ${fullText}
@@ -81,23 +94,26 @@ ${fullText}
   "videoSummary": "这个视频主要讲了...",
   "nodes": [
     {
-      "title": "节点标题（具体、有信息量，如：用长方形面积问题引出一元二次方程）",
+      "title": "节点标题（具体、有信息量，如：一元二次方程的标准形式 ax²+bx+c=0）",
       "description": "这个节点讲了什么（一句话概括核心内容）",
       "keyConcepts": ["关键概念1", "关键概念2", "关键概念3"],
       "nodeType": "concept",
       "startText": "节点开头的几个字（用于定位，10-20字）",
-      "endText": "节点结尾的几个字（用于定位，10-20字）"
+      "endText": "节点结尾的几个字（用于定位，10-20字）",
+      "testablePoint": "这个节点可以测试什么（如：学生能否识别一元二次方程的标准形式）"
     }
   ]
 }
 
 ## 重要提示
-- **title 要具体有信息量**，不要用泛泛的"概念讲解"、"例题演示"，而是写清楚讲的是什么具体内容
+- **title 要具体有信息量**，写清楚讲的是什么具体知识点
 - **keyConcepts 必须填写 2-5 个数学术语**，用于后续检索匹配
+- **testablePoint 必须填写**，说明这个节点可以如何测试学生
 - startText 和 endText 必须是字幕中真实存在的文字片段
 - 确保相邻节点的内容是连续的，不要有遗漏
 - 第一个节点的 startText 应该是视频开头
-- 最后一个节点的 endText 应该是视频结尾`
+- 最后一个节点的 endText 应该是视频结尾
+- **不要人为限制节点数量**，根据内容中实际包含的可测试知识点数量来决定`
 }
 
 /**
@@ -273,6 +289,7 @@ export async function segmentVideoNodesV2(
       description: nodeAnalysis.description,
       keyConcepts: nodeAnalysis.keyConcepts || [],
       nodeType: nodeAnalysis.nodeType,
+      testablePoint: nodeAnalysis.testablePoint || '',
     })
 
     console.log(`[V2 Segmentation] 节点 ${i + 1}: ${formatTime(startTime)}-${formatTime(endTime)} "${nodeAnalysis.title}"`)

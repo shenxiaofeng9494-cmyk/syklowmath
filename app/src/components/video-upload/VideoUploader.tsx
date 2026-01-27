@@ -234,7 +234,7 @@ export function VideoUploader() {
         {status === 'idle' && (
           <>
             <div
-              className="border-2 border-dashed rounded-lg p-8 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-50 transition-colors"
+              className="border-2 border-dashed border-border rounded-lg p-8 text-center cursor-pointer hover:border-blue-400 hover:bg-blue-900/20 transition-colors"
               onClick={() => fileInputRef.current?.click()}
               onDrop={handleDrop}
               onDragOver={handleDragOver}
@@ -251,15 +251,15 @@ export function VideoUploader() {
                 <div className="space-y-2">
                   <FileVideo className="h-12 w-12 mx-auto text-blue-500" />
                   <p className="font-medium">{file.name}</p>
-                  <p className="text-sm text-gray-500">
+                  <p className="text-sm text-muted-foreground">
                     {(file.size / 1024 / 1024).toFixed(2)} MB
                   </p>
                 </div>
               ) : (
                 <div className="space-y-2">
-                  <Upload className="h-12 w-12 mx-auto text-gray-400" />
-                  <p className="text-gray-600">点击或拖拽视频文件到这里</p>
-                  <p className="text-sm text-gray-400">支持 MP4, WebM, MOV 格式</p>
+                  <Upload className="h-12 w-12 mx-auto text-muted-foreground" />
+                  <p className="text-muted-foreground">点击或拖拽视频文件到这里</p>
+                  <p className="text-sm text-muted-foreground">支持 MP4, WebM, MOV 格式</p>
                 </div>
               )}
             </div>
@@ -311,7 +311,7 @@ export function VideoUploader() {
                     </SelectItem>
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-gray-500">
+                <p className="text-xs text-muted-foreground">
                   {segmentationMethod === 'gpt'
                     ? '基于语义分析，理解教学内容结构，适合语音讲解为主的视频'
                     : '基于视觉转场检测，速度快，适合 PPT、板书切换明显的视频'}
@@ -319,14 +319,14 @@ export function VideoUploader() {
               </div>
 
               {/* 生成小游戏开关 */}
-              <div className="flex items-center justify-between p-4 bg-gradient-to-r from-purple-50 to-blue-50 rounded-lg border border-purple-100">
+              <div className="flex items-center justify-between p-4 bg-gradient-to-r from-purple-900/30 to-blue-900/30 rounded-lg border border-purple-700/50">
                 <div className="flex items-center gap-3">
-                  <Gamepad2 className="h-5 w-5 text-purple-500" />
+                  <Gamepad2 className="h-5 w-5 text-purple-400" />
                   <div>
                     <Label htmlFor="generate-games" className="text-sm font-medium">
                       生成互动小游戏
                     </Label>
-                    <p className="text-xs text-gray-500 mt-0.5">
+                    <p className="text-xs text-muted-foreground mt-0.5">
                       AI 将为每个知识点生成趣味游戏，帮助学生巩固理解
                     </p>
                   </div>
@@ -341,7 +341,7 @@ export function VideoUploader() {
 
             {/* 错误提示 */}
             {error && (
-              <div className="flex items-center gap-2 text-red-600 bg-red-50 p-3 rounded-lg">
+              <div className="flex items-center gap-2 text-red-400 bg-red-900/30 p-3 rounded-lg border border-red-700/50">
                 <AlertCircle className="h-5 w-5" />
                 <span>{error}</span>
               </div>
@@ -373,17 +373,17 @@ export function VideoUploader() {
             <Progress value={progress.progress} className="h-2" />
 
             <div className="text-center space-y-2">
-              <p className="text-gray-600">{progress.message}</p>
+              <p className="text-muted-foreground">{progress.message}</p>
             </div>
 
             {/* Agent 游戏生成详细进度 */}
             {progress.stage === 'games' && (
-              <div className="mt-4 bg-gradient-to-br from-purple-50 to-blue-50 border border-purple-200 rounded-xl p-5">
+              <div className="mt-4 bg-gradient-to-br from-purple-900/30 to-blue-900/30 border border-purple-700/50 rounded-xl p-5">
                 <div className="flex items-center gap-2 mb-4">
-                  <Gamepad2 className="w-5 h-5 text-purple-600" />
-                  <span className="font-semibold text-purple-800">AI Agent 正在生成游戏</span>
+                  <Gamepad2 className="w-5 h-5 text-purple-400" />
+                  <span className="font-semibold text-purple-300">AI Agent 正在生成游戏</span>
                   {progress.currentTurn && progress.maxTurns && (
-                    <span className="ml-auto text-sm text-purple-600 bg-purple-100 px-2 py-0.5 rounded-full">
+                    <span className="ml-auto text-sm text-purple-300 bg-purple-900/50 px-2 py-0.5 rounded-full">
                       轮次 {progress.currentTurn}/{progress.maxTurns}
                     </span>
                   )}
@@ -391,21 +391,21 @@ export function VideoUploader() {
 
                 {/* 当前节点进度 */}
                 {progress.currentNode && (
-                  <div className="mb-4 p-3 bg-white/60 rounded-lg border border-purple-100">
+                  <div className="mb-4 p-3 bg-gray-800/60 rounded-lg border border-purple-700/30">
                     <div className="flex items-center gap-2 text-sm">
-                      <Sparkles className="w-4 h-4 text-amber-500" />
-                      <span className="text-gray-600">正在处理：</span>
-                      <span className="font-medium text-purple-700">{progress.currentNode}</span>
+                      <Sparkles className="w-4 h-4 text-amber-400" />
+                      <span className="text-gray-400">正在处理：</span>
+                      <span className="font-medium text-purple-300">{progress.currentNode}</span>
                     </div>
                     {progress.completedNodes !== undefined && progress.totalNodes && (
                       <div className="mt-2 flex items-center gap-2">
-                        <div className="flex-1 h-1.5 bg-purple-100 rounded-full overflow-hidden">
+                        <div className="flex-1 h-1.5 bg-purple-900/50 rounded-full overflow-hidden">
                           <div
                             className="h-full bg-gradient-to-r from-purple-500 to-blue-500 transition-all duration-300"
                             style={{ width: `${(progress.completedNodes / progress.totalNodes) * 100}%` }}
                           />
                         </div>
-                        <span className="text-xs text-purple-600">{progress.completedNodes}/{progress.totalNodes}</span>
+                        <span className="text-xs text-purple-400">{progress.completedNodes}/{progress.totalNodes}</span>
                       </div>
                     )}
                   </div>
@@ -415,12 +415,12 @@ export function VideoUploader() {
                 {progress.thinking && progress.thinking.length > 0 && (
                   <div className="mb-4">
                     <div className="flex items-center gap-2 mb-2">
-                      <Brain className="w-4 h-4 text-blue-600" />
-                      <span className="text-sm font-medium text-blue-800">Agent 思考</span>
+                      <Brain className="w-4 h-4 text-blue-400" />
+                      <span className="text-sm font-medium text-blue-300">Agent 思考</span>
                     </div>
                     <div className="space-y-2 max-h-32 overflow-y-auto">
                       {progress.thinking.slice(-3).map((thought, i) => (
-                        <div key={i} className="text-sm text-gray-600 bg-white/80 p-2 rounded border-l-2 border-blue-300">
+                        <div key={i} className="text-sm text-gray-300 bg-gray-800/80 p-2 rounded border-l-2 border-blue-500">
                           {thought.length > 150 ? thought.slice(0, 150) + '...' : thought}
                         </div>
                       ))}
@@ -432,14 +432,14 @@ export function VideoUploader() {
                 {progress.steps && progress.steps.length > 0 && (
                   <div>
                     <div className="flex items-center gap-2 mb-2">
-                      <Code className="w-4 h-4 text-green-600" />
-                      <span className="text-sm font-medium text-green-800">生成步骤</span>
+                      <Code className="w-4 h-4 text-green-400" />
+                      <span className="text-sm font-medium text-green-300">生成步骤</span>
                     </div>
                     <div className="space-y-1.5">
                       {progress.steps.slice(-4).map((step, i) => (
                         <div key={i} className="flex items-start gap-2 text-sm">
-                          <CheckCircle className="w-3.5 h-3.5 text-green-500 mt-0.5 flex-shrink-0" />
-                          <span className="text-gray-700">
+                          <CheckCircle className="w-3.5 h-3.5 text-green-400 mt-0.5 flex-shrink-0" />
+                          <span className="text-gray-300">
                             {step.length > 80 ? step.slice(0, 80) + '...' : step}
                           </span>
                         </div>
@@ -450,7 +450,7 @@ export function VideoUploader() {
 
                 {/* 详细信息 */}
                 {progress.details && !progress.thinking?.length && !progress.steps?.length && (
-                  <div className="text-sm text-purple-700 bg-white/60 p-3 rounded-lg">
+                  <div className="text-sm text-purple-300 bg-gray-800/60 p-3 rounded-lg">
                     {progress.details}
                   </div>
                 )}
@@ -459,8 +459,8 @@ export function VideoUploader() {
 
             {/* 非游戏阶段的详细信息 */}
             {progress.stage !== 'games' && progress.details && (
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                <p className="text-sm text-blue-700">
+              <div className="bg-blue-900/30 border border-blue-700/50 rounded-lg p-3">
+                <p className="text-sm text-blue-300">
                   <span className="font-medium">详细进度：</span>
                   {progress.details}
                 </p>
@@ -474,14 +474,14 @@ export function VideoUploader() {
           <div className="space-y-4">
             <div className="flex items-center justify-center gap-3">
               {getStatusIcon()}
-              <span className="text-lg font-medium text-green-600">处理完成！</span>
+              <span className="text-lg font-medium text-green-400">处理完成！</span>
             </div>
 
-            <div className="bg-green-50 p-4 rounded-lg text-center">
-              <p className="text-gray-700">
+            <div className="bg-green-900/30 border border-green-700/50 p-4 rounded-lg text-center">
+              <p className="text-gray-200">
                 视频 <strong>{result.videoId}</strong> 已处理完成
               </p>
-              <p className="text-gray-600 mt-1">
+              <p className="text-gray-300 mt-1">
                 共生成 <strong>{result.nodeCount}</strong> 个知识点节点
                 {result.gameCount !== undefined && result.gameCount > 0 && (
                   <span>、<strong>{result.gameCount}</strong> 个互动游戏</span>
@@ -517,11 +517,11 @@ export function VideoUploader() {
           <div className="space-y-4">
             <div className="flex items-center justify-center gap-3">
               {getStatusIcon()}
-              <span className="text-lg font-medium text-red-600">处理失败</span>
+              <span className="text-lg font-medium text-red-400">处理失败</span>
             </div>
 
-            <div className="bg-red-50 p-4 rounded-lg text-center">
-              <p className="text-red-600">{error}</p>
+            <div className="bg-red-900/30 border border-red-700/50 p-4 rounded-lg text-center">
+              <p className="text-red-400">{error}</p>
             </div>
 
             <Button variant="outline" className="w-full" onClick={handleReset}>

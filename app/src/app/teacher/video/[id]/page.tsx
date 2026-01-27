@@ -167,9 +167,9 @@ export default function VideoDetailPage() {
 
   const getDifficultyBadge = (difficulty: string) => {
     const config = {
-      easy: { color: 'bg-green-100 text-green-800', label: '简单' },
-      medium: { color: 'bg-yellow-100 text-yellow-800', label: '中等' },
-      hard: { color: 'bg-red-100 text-red-800', label: '困难' },
+      easy: { color: 'bg-green-900 text-green-300', label: '简单' },
+      medium: { color: 'bg-yellow-900 text-yellow-300', label: '中等' },
+      hard: { color: 'bg-red-900 text-red-300', label: '困难' },
     }
     const style = config[difficulty as keyof typeof config] || config.medium
     return <Badge className={style.color}>{style.label}</Badge>
@@ -177,7 +177,7 @@ export default function VideoDetailPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-lg">加载中...</div>
       </div>
     )
@@ -185,9 +185,9 @@ export default function VideoDetailPage() {
 
   if (!video) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
-          <div className="text-lg text-gray-600 mb-4">视频不存在</div>
+          <div className="text-lg text-muted-foreground mb-4">视频不存在</div>
           <Link href="/teacher">
             <Button>返回视频列表</Button>
           </Link>
@@ -197,9 +197,9 @@ export default function VideoDetailPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-background">
       {/* Header */}
-      <header className="bg-white shadow-sm border-b">
+      <header className="bg-card shadow-sm border-b border-border">
         <div className="max-w-7xl mx-auto px-4 py-4">
           <div className="flex items-center gap-4">
             <Link href="/teacher">
@@ -209,8 +209,8 @@ export default function VideoDetailPage() {
               </Button>
             </Link>
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">{video.title}</h1>
-              <p className="text-gray-600">{video.description || '暂无描述'}</p>
+              <h1 className="text-2xl font-bold text-foreground">{video.title}</h1>
+              <p className="text-muted-foreground">{video.description || '暂无描述'}</p>
             </div>
           </div>
         </div>
@@ -268,7 +268,7 @@ export default function VideoDetailPage() {
                   />
                 )}
 
-                <div className="flex items-center gap-4 text-sm text-gray-600">
+                <div className="flex items-center gap-4 text-sm text-muted-foreground">
                   <span>时长: {formatTime(video.duration)}</span>
                   {video.teacher && <span>讲师: {video.teacher}</span>}
                 </div>
@@ -285,7 +285,7 @@ export default function VideoDetailPage() {
                   {nodes.map((node, index) => (
                     <div
                       key={node.id}
-                      className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition-colors cursor-pointer"
+                      className="border border-border rounded-lg p-4 hover:bg-muted transition-colors cursor-pointer"
                       onClick={() => handleSeek(node.start_time)}
                     >
                       <div className="flex items-start justify-between mb-2">
@@ -293,16 +293,16 @@ export default function VideoDetailPage() {
                           <Badge variant="outline">节点 {index + 1}</Badge>
                           <Badge variant="secondary">{node.node_type}</Badge>
                         </div>
-                        <div className="text-sm text-gray-500">
+                        <div className="text-sm text-muted-foreground">
                           {formatTime(node.start_time)} - {formatTime(node.end_time)}
                         </div>
                       </div>
-                      <h4 className="font-medium text-gray-900 mb-2">{node.title}</h4>
-                      <p className="text-gray-600 text-sm">{node.summary}</p>
+                      <h4 className="font-medium text-foreground mb-2">{node.title}</h4>
+                      <p className="text-muted-foreground text-sm">{node.summary}</p>
                     </div>
                   ))}
                   {nodes.length === 0 && (
-                    <div className="text-center text-gray-500 py-8">
+                    <div className="text-center text-muted-foreground py-8">
                       暂无知识点节点
                     </div>
                   )}
@@ -325,13 +325,13 @@ export default function VideoDetailPage() {
                   {games.map((game) => (
                     <div
                       key={game.id}
-                      className="border border-gray-200 rounded-lg p-3 hover:bg-gray-50 transition-colors"
+                      className="border border-border rounded-lg p-3 hover:bg-muted transition-colors"
                     >
                       <div className="flex items-start justify-between mb-2">
                         <h4 className="font-medium text-sm">{game.title}</h4>
                         {getDifficultyBadge(game.difficulty)}
                       </div>
-                      <p className="text-gray-600 text-xs mb-3">{game.description}</p>
+                      <p className="text-muted-foreground text-xs mb-3">{game.description}</p>
                       <div className="flex gap-2">
                         <Button
                           size="sm"
@@ -354,7 +354,7 @@ export default function VideoDetailPage() {
                     </div>
                   ))}
                   {games.length === 0 && (
-                    <div className="text-center text-gray-500 py-8">
+                    <div className="text-center text-muted-foreground py-8">
                       暂无生成的游戏
                     </div>
                   )}
@@ -367,11 +367,11 @@ export default function VideoDetailPage() {
         {/* 游戏试玩模态框 */}
         {selectedGame && !showFeedback && (
           <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] overflow-hidden">
-              <div className="flex items-center justify-between p-4 border-b">
+            <div className="bg-card rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] overflow-hidden">
+              <div className="flex items-center justify-between p-4 border-b border-border">
                 <div>
                   <h3 className="font-semibold">{selectedGame.title}</h3>
-                  <p className="text-sm text-gray-600">{selectedGame.description}</p>
+                  <p className="text-sm text-muted-foreground">{selectedGame.description}</p>
                 </div>
                 <div className="flex gap-2">
                   <Button
@@ -416,13 +416,13 @@ export default function VideoDetailPage() {
         {/* 反馈模态框 */}
         {showFeedback && selectedGame && (
           <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl">
+            <div className="bg-card rounded-lg shadow-xl w-full max-w-2xl">
               <div className="p-6">
                 <h3 className="text-lg font-semibold mb-4">
                   为 &ldquo;{selectedGame.title}&rdquo; 提供反馈
                 </h3>
                 <div className="mb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-foreground mb-2">
                     您的改进建议：
                   </label>
                   <Textarea

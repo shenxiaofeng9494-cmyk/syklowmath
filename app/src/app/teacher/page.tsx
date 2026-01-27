@@ -72,13 +72,13 @@ export default function TeacherPage() {
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'completed':
-        return <Badge className="bg-green-100 text-green-800">已完成</Badge>
+        return <Badge className="bg-green-900 text-green-300">已完成</Badge>
       case 'processing':
-        return <Badge className="bg-yellow-100 text-yellow-800">处理中</Badge>
+        return <Badge className="bg-yellow-900 text-yellow-300">处理中</Badge>
       case 'error':
-        return <Badge className="bg-red-100 text-red-800">失败</Badge>
+        return <Badge className="bg-red-900 text-red-300">失败</Badge>
       default:
-        return <Badge className="bg-gray-100 text-gray-800">未知</Badge>
+        return <Badge className="bg-muted text-muted-foreground">未知</Badge>
     }
   }
 
@@ -110,21 +110,21 @@ export default function TeacherPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-lg">加载中...</div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-background">
       {/* Header */}
-      <header className="bg-white shadow-sm border-b">
+      <header className="bg-card shadow-sm border-b border-border">
         <div className="max-w-7xl mx-auto px-4 py-6">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">老师端 - 视频管理中心</h1>
-              <p className="text-gray-600 mt-1">管理教学视频、查看分段、测试游戏</p>
+              <h1 className="text-3xl font-bold text-foreground">老师端 - 视频管理中心</h1>
+              <p className="text-muted-foreground mt-1">管理教学视频、查看分段、测试游戏</p>
             </div>
             <div className="flex gap-3">
               <Link href="/admin">
@@ -143,7 +143,7 @@ export default function TeacherPage() {
         <div className="mb-8">
           <div className="flex gap-4 mb-4">
             <div className="flex-1 relative">
-              <Search className="w-5 h-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+              <Search className="w-5 h-5 absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground" />
               <Input
                 placeholder="搜索视频标题或描述..."
                 value={searchQuery}
@@ -154,7 +154,7 @@ export default function TeacherPage() {
             <select
               value={selectedStatus}
               onChange={(e) => setSelectedStatus(e.target.value)}
-              className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="px-3 py-2 border border-border bg-card text-foreground rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <option value="all">全部状态</option>
               <option value="completed">已完成</option>
@@ -215,7 +215,7 @@ export default function TeacherPage() {
           {filteredVideos.length === 0 ? (
             <Card>
               <CardContent className="py-12 text-center">
-                <div className="text-gray-500 mb-4">
+                <div className="text-muted-foreground mb-4">
                   {searchQuery || selectedStatus !== 'all' ? '没有找到匹配的视频' : '还没有上传任何视频'}
                 </div>
                 <Link href="/admin">
@@ -240,11 +240,11 @@ export default function TeacherPage() {
                         </CardDescription>
                         <div className="flex items-center gap-4 mt-3">
                           {getStatusBadge(video.status)}
-                          <span className="text-sm text-gray-500">
+                          <span className="text-sm text-muted-foreground">
                             {new Date(video.created_at).toLocaleDateString('zh-CN')}
                           </span>
                           {video.teacher && (
-                            <span className="text-sm text-gray-500">
+                            <span className="text-sm text-muted-foreground">
                               讲师: {video.teacher}
                             </span>
                           )}
@@ -270,20 +270,20 @@ export default function TeacherPage() {
                   <CardContent>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       <div className="flex items-center gap-2">
-                        <Users className="w-4 h-4 text-gray-400" />
+                        <Users className="w-4 h-4 text-muted-foreground" />
                         <span className="text-sm">
                           <strong>{video.node_count || 0}</strong> 个知识点节点
                         </span>
                       </div>
                       <div className="flex items-center gap-2">
-                        <Gamepad2 className="w-4 h-4 text-gray-400" />
+                        <Gamepad2 className="w-4 h-4 text-muted-foreground" />
                         <span className="text-sm">
                           <strong>{gameSummary?.game_count || 0}</strong> 个生成游戏
                         </span>
                       </div>
                       <div className="flex items-center gap-2">
-                        <Play className="w-4 h-4 text-gray-400" />
-                        <span className="text-sm text-gray-600">
+                        <Play className="w-4 h-4 text-muted-foreground" />
+                        <span className="text-sm text-muted-foreground">
                           视频时长: 约 {Math.round((video.node_count || 0) * 1.5)} 分钟
                         </span>
                       </div>
@@ -291,8 +291,8 @@ export default function TeacherPage() {
 
                     {/* 游戏列表预览 */}
                     {gameSummary && gameSummary.game_count > 0 && (
-                      <div className="mt-4 pt-4 border-t">
-                        <div className="text-sm font-medium text-gray-700 mb-2">生成的游戏:</div>
+                      <div className="mt-4 pt-4 border-t border-border">
+                        <div className="text-sm font-medium text-foreground mb-2">生成的游戏:</div>
                         <div className="flex flex-wrap gap-2">
                           {gameSummary.game_titles.slice(0, 3).map((title, index) => (
                             <Badge key={index} variant="secondary" className="text-xs">

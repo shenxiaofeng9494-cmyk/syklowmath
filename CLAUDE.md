@@ -85,17 +85,20 @@ npx shadcn@latest add [component-name]
 - `src/components/whiteboard/` - Math rendering (KaTeX, Mafs)
 - `src/components/game-player/` - Interactive math game interface
 - `src/components/game-preview/` - Game selection and preview
+- `src/components/node-editor/` - Timeline-based video node editor (drag-to-resize, validation)
 
 **Core Logic:**
 - `src/hooks/useRealtimeVoice.ts` - WebSocket, audio I/O, VAD, tool handling (OpenAI Realtime)
 - `src/hooks/voice/` - Three-stage voice pipeline (Doubao ASR + DeepSeek LLM + Doubao TTS)
 - `src/hooks/usePyodide.ts` - Python execution in browser (code demos)
 - `src/lib/game-generator/` - AI game generation using Claude Agent SDK
+- `src/lib/node-validation.ts` - Video node time validation (overlap, bounds checking)
 
 **Backend APIs:**
 - `/api/realtime` - OpenAI Realtime session creation (legacy)
 - `/api/voice/*` - New voice endpoints (session, chat, asr, tts, doubao-realtime, tool-detect)
-- `/api/video/*` - Video CRUD, processing, search, context, nodes, and segment-volcengine endpoints
+- `/api/video/*` - Video CRUD, processing, search, context, and segment-volcengine endpoints
+- `/api/video/[id]/nodes` - Node CRUD with batch sync (create, update, delete in one request)
 - `/api/game/*` - Game generation (generate, batch-generate, feedback, per-game feedback)
 - `/api/transcribe` - Whisper transcription with caching
 - `/api/upload` - File upload to Aliyun OSS
@@ -209,6 +212,7 @@ VOLCENGINE_ACCESS_KEY_SECRET=...
 - **`/lib/volcengine-scene-segmentation.ts`** - Volcengine visual scene detection API
 - **`/lib/volcengine-auth.ts`** - Volcengine AWS Signature V4 authentication
 - **`/lib/volcengine-node-converter.ts`** - Convert Volcengine scenes to VideoNode format
+- **`/lib/volcengine-upload.ts`** - Upload video to Volcengine for processing
 - **`/lib/video-processor.ts`** - Main processing pipeline, supports both methods
 
 ## Data Flow
@@ -273,15 +277,6 @@ The `Whiteboard.tsx` component safely parses math expressions:
 
 ## Development Notes
 
-### Test Directories
-Several experimental/test directories exist in `src/app/`:
-- `test-graph/` - Graph rendering experiments
-- `test-voice/` - Voice interaction testing
-- `test-game/`, `game-test-simple/`, `game-test-fix/` - Game feature experiments
-- `quick-test/`, `play-test/`, `final-test/`, `debug-game/` - Rapid prototyping
-
-**Note:** These are not production code - evaluate before making changes.
-
 ### Adding New Features
 
 **Math rendering:**
@@ -299,10 +294,3 @@ Several experimental/test directories exist in `src/app/`:
 3. Implement in `/lib/game-generator/index.ts`
 4. Add UI in components
 
-## Configuration Files
-
-- `tsconfig.json` - TypeScript with path aliases
-- `eslint.config.mjs` - ESLint + Next.js rules
-- `tailwind.config.ts` - Tailwind CSS v4
-- `postcss.config.mjs` - PostCSS processing
-- `components.json` - shadcn/ui configuration

@@ -10,10 +10,8 @@ interface QuickIntentsProps {
 const QUICK_INTENTS = [
   { id: "explain", label: "解释一下", icon: "❓", template: '请解释一下"{subtitle}"是什么意思' },
   { id: "example", label: "举个例子", icon: "💡", template: '能举一个例子来解释"{subtitle}"吗' },
-  { id: "again", label: "再讲一遍", icon: "🔄", template: '请用更简单的语言再讲一遍"{subtitle}"' },
   { id: "formula", label: "写出公式", icon: "📐", template: "请把相关的公式写出来" },
-  { id: "why", label: "为什么", icon: "🤔", template: "为什么是这样？请解释一下原因" },
-  { id: "slow", label: "慢点讲", icon: "🐢", template: "请更详细地解释一下，我没太听懂" },
+  { id: "draw", label: "画图解释", icon: "🎨", template: "请画图来解释一下这个概念" },
 ];
 
 export function QuickIntents({ currentSubtitle, onSelect }: QuickIntentsProps) {

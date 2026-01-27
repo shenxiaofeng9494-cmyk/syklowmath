@@ -1,7 +1,6 @@
 "use client";
 
 import { useRef, useState, useEffect, useCallback, forwardRef, useImperativeHandle } from "react";
-import { Button } from "@/components/ui/button";
 import { SubtitleCue, getCurrentSubtitle, getSubtitleContext } from "@/data/videos";
 
 interface VideoNode {
@@ -19,12 +18,14 @@ interface VideoPlayerProps {
   isFullscreen?: boolean;
   showChatInFullscreen?: boolean;
   showSubtitles?: boolean;
+  isDrawingOpen?: boolean;
   isMicActive?: boolean;
   isAISpeaking?: boolean;
   hideControls?: boolean;
   onToggleConversation: () => void;
   onToggleFullscreen?: () => void;
   onToggleChat?: () => void;
+  onToggleDrawing?: () => void;
   onJoinMeeting?: () => void;  // 点击 Join Meeting 按钮
   onContextUpdate?: (context: { currentTime: number; subtitle: string; context: string }) => void;
   onJumpToNode?: (node: VideoNode) => void;
@@ -46,12 +47,14 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
     isFullscreen = false,
     showChatInFullscreen = false,
     showSubtitles = true,
+    isDrawingOpen = false,
     isMicActive = false,
     isAISpeaking = false,
     hideControls = false,
     onToggleConversation,
     onToggleFullscreen,
     onToggleChat,
+    onToggleDrawing,
     onJoinMeeting,
     onContextUpdate,
     onJumpToNode,
@@ -64,6 +67,18 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
     const [currentSubtitle, setCurrentSubtitle] = useState("");
     const [hoveredNode, setHoveredNode] = useState<VideoNode | null>(null);
     const [lastCompletedNodeId, setLastCompletedNodeId] = useState<number | null>(null);
+    const [hasShownFirstFrame, setHasShownFirstFrame] = useState(false);
+
+    // 确保显示第一帧
+    useEffect(() => {
+      if (videoRef.current && !hasShownFirstFrame && duration > 0) {
+        const video = videoRef.current;
+        if (video.readyState >= 2 && video.currentTime < 0.1) {
+          video.currentTime = 0.1;
+          setHasShownFirstFrame(true);
+        }
+      }
+    }, [duration, hasShownFirstFrame]);
 
     // 暴露控制方法给父组件
     useImperativeHandle(ref, () => ({
@@ -146,6 +161,19 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
       }
     };
 
+    // 视频可以播放时，显示第一帧
+    const handleCanPlay = () => {
+      if (videoRef.current && !hasShownFirstFrame) {
+        // 使用 setTimeout 确保视频完全准备好
+        setTimeout(() => {
+          if (videoRef.current && videoRef.current.currentTime < 0.1) {
+            videoRef.current.currentTime = 0.5;
+            setHasShownFirstFrame(true);
+          }
+        }, 100);
+      }
+    };
+
     // 进度条点击
     const handleProgressClick = (e: React.MouseEvent<HTMLDivElement>) => {
       if (videoRef.current && duration > 0) {
@@ -181,10 +209,12 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
           className={`${isFullscreen ? "w-full h-full object-contain" : "w-full aspect-video"}`}
           onTimeUpdate={handleTimeUpdate}
           onLoadedMetadata={handleLoadedMetadata}
+          onCanPlay={handleCanPlay}
           onPlay={() => setIsPlaying(true)}
           onPause={() => setIsPlaying(false)}
           onClick={togglePlay}
           playsInline
+          preload="auto"
         />
 
         {/* 字幕显示 */}
@@ -297,38 +327,6 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
             </div>
 
             <div className="flex items-center gap-2">
-              {/* 聊天切换按钮（全屏模式下且已加入对话时显示） */}
-              {isFullscreen && isInConversation && (
-                <button
-                  onClick={onToggleChat}
-                  className={`p-2 rounded transition-colors ${
-                    showChatInFullscreen
-                      ? "bg-blue-500 text-white"
-                      : "text-white hover:bg-white/20"
-                  }`}
-                  title={showChatInFullscreen ? "隐藏聊天" : "显示聊天"}
-                >
-                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z" />
-                  </svg>
-                </button>
-              )}
-
-              {/* 加入对话按钮 - 游戏化样式 */}
-              <Button
-                onClick={onToggleConversation}
-                className={`rounded-full px-6 transition-all btn-3d ${
-                  isInConversation
-                    ? "bg-[#4ECDC4] hover:bg-[#3dbdb5] text-white border-b-4 border-[#3a9e98]"
-                    : "bg-[#FF6B6B] hover:bg-[#ff5252] text-white border-b-4 border-[#cc5555]"
-                }`}
-              >
-                <svg className="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M12 14c1.66 0 2.99-1.34 2.99-3L15 5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z" />
-                </svg>
-                {isInConversation ? "对话中" : "加入对话"}
-              </Button>
-
               {/* 全屏按钮 */}
               {onToggleFullscreen && (
                 <button

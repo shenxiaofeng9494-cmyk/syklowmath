@@ -19,15 +19,16 @@ interface NodeSegmentProps {
   onTimeChange: (startTime: number, endTime: number) => void
 }
 
-const NODE_TYPE_COLORS: Record<string, string> = {
-  intro: 'bg-blue-400',
-  concept: 'bg-green-400',
-  method: 'bg-purple-400',
-  example: 'bg-orange-400',
-  pitfall: 'bg-red-400',
-  summary: 'bg-teal-400',
-  transition: 'bg-gray-400',
-  other: 'bg-slate-400',
+// 深色主题配色：20% 透明度背景 + 亮色边框 + 400 级别文字
+const NODE_TYPE_COLORS: Record<string, { bg: string; border: string; text: string }> = {
+  intro: { bg: 'bg-blue-500/20', border: 'border-blue-500', text: 'text-blue-400' },
+  concept: { bg: 'bg-emerald-500/20', border: 'border-emerald-500', text: 'text-emerald-400' },
+  method: { bg: 'bg-violet-500/20', border: 'border-violet-500', text: 'text-violet-400' },
+  example: { bg: 'bg-amber-500/20', border: 'border-amber-500', text: 'text-amber-400' },
+  pitfall: { bg: 'bg-red-500/20', border: 'border-red-500', text: 'text-red-400' },
+  summary: { bg: 'bg-teal-500/20', border: 'border-teal-500', text: 'text-teal-400' },
+  transition: { bg: 'bg-gray-500/20', border: 'border-gray-500', text: 'text-gray-400' },
+  other: { bg: 'bg-slate-500/20', border: 'border-slate-500', text: 'text-slate-400' },
 }
 
 export function NodeSegment({
@@ -46,7 +47,7 @@ export function NodeSegment({
   const left = (node.start_time / duration) * 100
   const width = ((node.end_time - node.start_time) / duration) * 100
 
-  const bgColor = NODE_TYPE_COLORS[node.node_type] || NODE_TYPE_COLORS.other
+  const colors = NODE_TYPE_COLORS[node.node_type] || NODE_TYPE_COLORS.other
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent, type: 'left' | 'right' | 'move') => {
@@ -100,8 +101,8 @@ export function NodeSegment({
   return (
     <div
       ref={segmentRef}
-      className={`absolute top-1 bottom-1 rounded cursor-pointer transition-all ${bgColor} ${
-        isSelected ? 'ring-2 ring-blue-600 ring-offset-1' : ''
+      className={`absolute top-1 bottom-1 rounded cursor-pointer transition-all border ${colors.bg} ${colors.border} hover:brightness-125 ${
+        isSelected ? 'ring-2 ring-white/50 ring-offset-1 ring-offset-zinc-900' : ''
       } ${hasError ? 'ring-2 ring-red-500' : ''}`}
       style={{
         left: `${left}%`,
@@ -111,23 +112,23 @@ export function NodeSegment({
     >
       {/* 左拖拽手柄 */}
       <div
-        className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-black/20 rounded-l"
+        className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/10 rounded-l"
         onMouseDown={(e) => handleMouseDown(e, 'left')}
       />
 
       {/* 中间区域 - 可拖动整体 */}
       <div
-        className="absolute left-2 right-2 top-0 bottom-0 cursor-move overflow-hidden"
+        className="absolute left-2 right-2 top-0 bottom-0 cursor-move overflow-hidden flex items-center justify-center"
         onMouseDown={(e) => handleMouseDown(e, 'move')}
       >
-        <span className="text-xs text-white font-medium truncate px-1 leading-8">
+        <span className={`text-sm font-medium truncate px-1 ${colors.text}`}>
           {node.title}
         </span>
       </div>
 
       {/* 右拖拽手柄 */}
       <div
-        className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-black/20 rounded-r"
+        className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize hover:bg-white/10 rounded-r"
         onMouseDown={(e) => handleMouseDown(e, 'right')}
       />
     </div>
