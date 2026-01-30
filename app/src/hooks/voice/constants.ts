@@ -76,13 +76,13 @@ export const TTS_EVENT = {
 } as const;
 
 // ============================================================================
-// LLM Constants (DeepSeek V3)
+// LLM Constants (Doubao LLM)
 // ============================================================================
 
-export const LLM_API_URL = "https://api.deepseek.com/chat/completions";
+export const LLM_API_URL = process.env.DOUBAO_API_BASE || "https://ark.cn-beijing.volces.com/api/v3";
 
 export const LLM_DEFAULTS = {
-  MODEL: "deepseek-chat",  // DeepSeek-V3
+  MODEL: process.env.DOUBAO_MODEL_ENDPOINT || "ep-20250119143058-lzl6k",  // Doubao LLM endpoint
   MAX_TOKENS: 2048,
   TEMPERATURE: 0.7,
   TOP_P: 0.9,

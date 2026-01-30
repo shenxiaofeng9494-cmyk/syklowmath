@@ -263,7 +263,19 @@ const sessions = new Map<string, {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
+    // 安全地解析 JSON，处理空请求体的情况
+    let body;
+    try {
+      const text = await req.text();
+      if (!text || text.trim() === '') {
+        return NextResponse.json({ error: "Empty request body" }, { status: 400 });
+      }
+      body = JSON.parse(text);
+    } catch (parseError) {
+      console.error('[Doubao Realtime] JSON parse error:', parseError);
+      return NextResponse.json({ error: "Invalid JSON in request body" }, { status: 400 });
+    }
+
     const { action } = body as { action?: string };
 
     if (action === "create") {

@@ -2,6 +2,8 @@
 
 import { useRef, useState, useEffect, useCallback, forwardRef, useImperativeHandle } from "react";
 import { SubtitleCue, getCurrentSubtitle, getSubtitleContext } from "@/data/videos";
+import { useCheckpointIntervention } from "@/hooks/useCheckpointIntervention";
+import { VideoNode as DatabaseVideoNode } from "@/types/database";
 
 interface VideoNode {
   order: number;
@@ -14,6 +16,7 @@ interface VideoPlayerProps {
   videoUrl: string;
   subtitles: SubtitleCue[];
   nodes?: VideoNode[];
+  videoId?: string;
   isInConversation: boolean;
   isFullscreen?: boolean;
   showChatInFullscreen?: boolean;
@@ -22,14 +25,17 @@ interface VideoPlayerProps {
   isMicActive?: boolean;
   isAISpeaking?: boolean;
   hideControls?: boolean;
+  interventionConfig?: any; // 介入配置，用于检测是否在介入模式
   onToggleConversation: () => void;
   onToggleFullscreen?: () => void;
   onToggleChat?: () => void;
   onToggleDrawing?: () => void;
-  onJoinMeeting?: () => void;  // 点击 Join Meeting 按钮
+  onJoinMeeting?: () => void;
   onContextUpdate?: (context: { currentTime: number; subtitle: string; context: string }) => void;
   onJumpToNode?: (node: VideoNode) => void;
   onNodeComplete?: (node: VideoNode) => void;
+  onCheckpointIntervention?: (checkpoint: DatabaseVideoNode) => void;
+  onExitIntervention?: () => void; // 退出介入模式的回调
 }
 
 export interface VideoPlayerHandle {
@@ -43,6 +49,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
     videoUrl,
     subtitles,
     nodes = [],
+    videoId,
     isInConversation,
     isFullscreen = false,
     showChatInFullscreen = false,
@@ -51,6 +58,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
     isMicActive = false,
     isAISpeaking = false,
     hideControls = false,
+    interventionConfig,
     onToggleConversation,
     onToggleFullscreen,
     onToggleChat,
@@ -58,7 +66,9 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
     onJoinMeeting,
     onContextUpdate,
     onJumpToNode,
-    onNodeComplete
+    onNodeComplete,
+    onCheckpointIntervention,
+    onExitIntervention
   }, ref) {
     const videoRef = useRef<HTMLVideoElement>(null);
     const [isPlaying, setIsPlaying] = useState(false);
@@ -68,6 +78,51 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
     const [hoveredNode, setHoveredNode] = useState<VideoNode | null>(null);
     const [lastCompletedNodeId, setLastCompletedNodeId] = useState<number | null>(null);
     const [hasShownFirstFrame, setHasShownFirstFrame] = useState(false);
+    const [checkpointNodes, setCheckpointNodes] = useState<DatabaseVideoNode[]>([]);
+
+    // 获取必停点数据
+    useEffect(() => {
+      if (!videoId) return;
+
+      const fetchCheckpoints = async () => {
+        try {
+          const response = await fetch(`/api/video/${videoId}/checkpoint`);
+          const data = await response.json();
+          if (data.success) {
+            setCheckpointNodes(data.data);
+            console.log('[VideoPlayer] 加载必停点:', data.data);
+          }
+        } catch (error) {
+          console.error('[VideoPlayer] 获取必停点失败:', error);
+        }
+      };
+
+      fetchCheckpoints();
+    }, [videoId]);
+
+    // 必停点介入Hook
+    const {
+      isIntervening,
+      currentCheckpoint,
+      endIntervention
+    } = useCheckpointIntervention({
+      nodes: checkpointNodes,
+      currentTime,
+      isPlaying,
+      onIntervention: (checkpoint) => {
+        console.log('[VideoPlayer] 触发必停点介入:', checkpoint.title);
+
+        // 暂停视频
+        if (videoRef.current) {
+          videoRef.current.pause();
+        }
+
+        // 通知父组件
+        if (onCheckpointIntervention) {
+          onCheckpointIntervention(checkpoint);
+        }
+      }
+    });
 
     // 确保显示第一帧
     useEffect(() => {
@@ -142,10 +197,15 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
         if (isPlaying) {
           videoRef.current.pause();
         } else {
+          // 播放前检查是否在介入模式
+          if (interventionConfig && onExitIntervention) {
+            console.log('[VideoPlayer] 检测到介入模式，先退出介入再播放');
+            onExitIntervention();
+          }
           videoRef.current.play();
         }
       }
-    }, [isPlaying]);
+    }, [isPlaying, interventionConfig, onExitIntervention]);
 
     // 时间更新
     const handleTimeUpdate = () => {

@@ -22,6 +22,7 @@ interface ChatPanelProps {
   autoStart?: boolean;
   voiceMode?: VoiceMode;
   voiceBackend?: VoiceBackend;
+  interventionConfig?: any;  // 新增：介入模式配置
   onVoiceModeChange?: (mode: VoiceMode) => void;
   onVoiceBackendChange?: (backend: VoiceBackend) => void;
   onToggle: () => void;
@@ -35,6 +36,7 @@ interface ChatPanelProps {
   onClearDrawing?: () => void;
   onMicStatusChange?: (active: boolean) => void;
   onAISpeakingChange?: (speaking: boolean) => void;
+  onEndIntervention?: () => void;  // 新增：结束介入回调
 }
 
 export function ChatPanel({
@@ -48,6 +50,7 @@ export function ChatPanel({
   autoStart = false,
   voiceMode = "realtime",
   voiceBackend = "doubao_realtime",
+  interventionConfig,
   onVoiceModeChange,
   onVoiceBackendChange,
   onToggle,
@@ -61,6 +64,7 @@ export function ChatPanel({
   onClearDrawing,
   onMicStatusChange,
   onAISpeakingChange,
+  onEndIntervention,
 }: ChatPanelProps) {
   return (
     <div className="h-full flex flex-col bg-[#1a1a1a] rounded-2xl overflow-hidden">
@@ -98,6 +102,7 @@ export function ChatPanel({
           subtitles={subtitles}
           voiceBackend={voiceBackend}
           voiceMode={voiceMode}
+          interventionConfig={interventionConfig}
           onVoiceModeChange={onVoiceModeChange}
           onToggle={onToggle}
           onPauseVideo={onPauseVideo}
@@ -109,6 +114,7 @@ export function ChatPanel({
           onClearDrawing={onClearDrawing}
           onMicStatusChange={onMicStatusChange}
           onAISpeakingChange={onAISpeakingChange}
+          onEndIntervention={onEndIntervention}
           embedded={true}
           autoStart={autoStart}
         />

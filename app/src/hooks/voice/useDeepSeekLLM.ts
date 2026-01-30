@@ -1,9 +1,9 @@
 "use client";
 
 /**
- * useDeepSeekLLM Hook
+ * useDoubaoLLM Hook
  *
- * DeepSeek V3 LLM client with streaming and function calling support.
+ * Doubao LLM client with streaming and function calling support.
  * Communicates through the /api/voice/chat proxy endpoint.
  */
 
@@ -11,7 +11,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { LLM_DEFAULTS } from "./constants";
 import type { ChatMessage, ToolCall, LLMConfig } from "./types";
 
-interface UseDeepSeekLLMOptions {
+interface UseDoubaoLLMOptions {
   config: LLMConfig;
   onContent?: (text: string) => void;
   onToolCall?: (toolCall: { id: string; name: string; arguments: string }) => void;
@@ -19,7 +19,7 @@ interface UseDeepSeekLLMOptions {
   onError?: (error: Error) => void;
 }
 
-interface UseDeepSeekLLMReturn {
+interface UseDoubaoLLMReturn {
   isProcessing: boolean;
   send: (userMessage: string) => Promise<void>;
   sendWithHistory: (messages: ChatMessage[]) => Promise<void>;
@@ -48,7 +48,7 @@ function parseSSEData(line: string): unknown | null {
   }
 }
 
-export function useDeepSeekLLM(options: UseDeepSeekLLMOptions): UseDeepSeekLLMReturn {
+export function useDoubaoLLM(options: UseDoubaoLLMOptions): UseDoubaoLLMReturn {
   const [isProcessing, setIsProcessing] = useState(false);
   const [history, setHistory] = useState<ChatMessage[]>([]);
 

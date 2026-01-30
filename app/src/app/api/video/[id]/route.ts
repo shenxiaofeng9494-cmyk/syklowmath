@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabase } from '@/lib/supabase'
 import type { Video as DBVideo } from '@/types/database'
+import { getVideoById } from '@/data/videos'
+import { getFallbackNodes } from '@/data/video-nodes'
 
 // 返回给客户端的视频格式（兼容旧格式）
 interface ClientVideo {
@@ -34,6 +36,28 @@ export async function GET(
   try {
     const { id } = await params
 
+    // If Supabase is not configured, use fallback data
+    if (!supabase) {
+      const fallbackVideo = getVideoById(id);
+      if (!fallbackVideo) {
+        return NextResponse.json(
+          { error: 'Video not found' },
+          { status: 404 }
+        )
+      }
+      const nodes = getFallbackNodes(id);
+      return NextResponse.json({
+        id: fallbackVideo.id,
+        title: fallbackVideo.title,
+        description: fallbackVideo.description,
+        videoUrl: fallbackVideo.videoUrl,
+        duration: fallbackVideo.duration,
+        teacher: fallbackVideo.teacher,
+        status: 'ready',
+        nodeCount: nodes.length,
+      })
+    }
+
     // 从 Supabase 查询视频
     const { data, error } = await supabase
       .from('videos')
@@ -42,10 +66,25 @@ export async function GET(
       .single()
 
     if (error || !data) {
-      return NextResponse.json(
-        { error: 'Video not found' },
-        { status: 404 }
-      )
+      // Fallback to hardcoded data
+      const fallbackVideo = getVideoById(id);
+      if (!fallbackVideo) {
+        return NextResponse.json(
+          { error: 'Video not found' },
+          { status: 404 }
+        )
+      }
+      const nodes = getFallbackNodes(id);
+      return NextResponse.json({
+        id: fallbackVideo.id,
+        title: fallbackVideo.title,
+        description: fallbackVideo.description,
+        videoUrl: fallbackVideo.videoUrl,
+        duration: fallbackVideo.duration,
+        teacher: fallbackVideo.teacher,
+        status: 'ready',
+        nodeCount: nodes.length,
+      })
     }
 
     // 映射为客户端格式

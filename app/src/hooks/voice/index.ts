@@ -3,7 +3,7 @@
  *
  * Three-stage voice pipeline for MathTalkTV:
  * - Doubao ASR (speech recognition)
- * - DeepSeek LLM (AI responses with function calling)
+ * - Doubao LLM (AI responses with function calling)
  * - Doubao TTS (speech synthesis)
  */
 
@@ -12,7 +12,7 @@ export { useVoiceInteraction } from "./useVoiceInteraction";
 
 // Sub-hooks
 export { useDoubaoASR } from "./useDoubaoASR";
-export { useDeepSeekLLM } from "./useDeepSeekLLM";
+export { useDoubaoLLM } from "./useDeepSeekLLM";  // 文件名保持不变，但导出新名称
 export { useDoubaoTTS } from "./useDoubaoTTS";
 export { useAudioCapture } from "./useAudioCapture";
 export { useAudioPlayback } from "./useAudioPlayback";

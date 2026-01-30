@@ -1,15 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions";
+// 豆包 LLM API 配置
+const DOUBAO_API_KEY = process.env.DOUBAO_API_KEY;
+const DOUBAO_API_BASE = process.env.DOUBAO_API_BASE || "https://ark.cn-beijing.volces.com/api/v3";
+const DOUBAO_MODEL_ENDPOINT = process.env.DOUBAO_MODEL_ENDPOINT;
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
 
-    const apiKey = process.env.DEEPSEEK_API_KEY;
-    if (!apiKey) {
+    if (!DOUBAO_API_KEY) {
       return NextResponse.json(
-        { error: "DEEPSEEK_API_KEY not configured" },
+        { error: "DOUBAO_API_KEY not configured" },
+        { status: 500 }
+      );
+    }
+
+    if (!DOUBAO_MODEL_ENDPOINT) {
+      return NextResponse.json(
+        { error: "DOUBAO_MODEL_ENDPOINT not configured" },
         { status: 500 }
       );
     }
@@ -22,9 +31,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Prepare request to DeepSeek
-    const deepseekRequest = {
-      model: body.model || "deepseek-chat",
+    // 构建豆包 API URL
+    const doubaoApiUrl = `${DOUBAO_API_BASE}/chat/completions`;
+
+    // Prepare request to Doubao LLM
+    const doubaoRequest = {
+      model: DOUBAO_MODEL_ENDPOINT,
       messages: body.messages,
       tools: body.tools,
       tool_choice: body.tool_choice || "auto",
@@ -35,21 +47,21 @@ export async function POST(req: NextRequest) {
     };
 
     // If not streaming, make a simple request
-    if (!deepseekRequest.stream) {
-      const response = await fetch(DEEPSEEK_API_URL, {
+    if (!doubaoRequest.stream) {
+      const response = await fetch(doubaoApiUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${apiKey}`,
+          "Authorization": `Bearer ${DOUBAO_API_KEY}`,
         },
-        body: JSON.stringify(deepseekRequest),
+        body: JSON.stringify(doubaoRequest),
       });
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error("DeepSeek API error:", errorText);
+        console.error("Doubao LLM API error:", errorText);
         return NextResponse.json(
-          { error: "DeepSeek API error", details: errorText },
+          { error: "Doubao LLM API error", details: errorText },
           { status: response.status }
         );
       }
@@ -59,20 +71,20 @@ export async function POST(req: NextRequest) {
     }
 
     // Streaming response
-    const response = await fetch(DEEPSEEK_API_URL, {
+    const response = await fetch(doubaoApiUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`,
+        "Authorization": `Bearer ${DOUBAO_API_KEY}`,
       },
-      body: JSON.stringify(deepseekRequest),
+      body: JSON.stringify(doubaoRequest),
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("DeepSeek API error:", errorText);
+      console.error("Doubao LLM API error:", errorText);
       return NextResponse.json(
-        { error: "DeepSeek API error", details: errorText },
+        { error: "Doubao LLM API error", details: errorText },
         { status: response.status }
       );
     }

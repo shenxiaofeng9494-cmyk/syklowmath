@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getNodeByTime, hybridSearch, assembleRAGContext, getAllNodes } from '@/lib/rag'
 import { supabase } from '@/lib/supabase'
 import type { VideoNodeSearchResult } from '@/types/database'
+import { getVideoById } from '@/data/videos'
 
 interface ContextParams {
   params: Promise<{ id: string }>
@@ -110,6 +111,37 @@ export async function GET(request: NextRequest, { params }: ContextParams) {
   const { id: videoId } = await params
 
   try {
+    // If Supabase is not configured, use fallback data
+    if (!supabase) {
+      const fallbackVideo = getVideoById(videoId);
+      if (!fallbackVideo) {
+        return NextResponse.json(
+          { error: 'Video not found' },
+          { status: 404 }
+        )
+      }
+      const nodes = await getAllNodes(videoId);
+      return NextResponse.json({
+        video: {
+          id: fallbackVideo.id,
+          title: fallbackVideo.title,
+          duration: fallbackVideo.duration,
+          nodeCount: nodes.length,
+          status: 'ready',
+        },
+        nodes: nodes.map(n => ({
+          id: n.id,
+          order: n.order,
+          title: n.title,
+          startTime: n.start_time,
+          endTime: n.end_time,
+          summary: n.summary,
+          keyConcepts: n.key_concepts,
+          nodeType: n.node_type,
+        })),
+      })
+    }
+
     // 获取视频信息
     const { data: video, error: videoError } = await supabase
       .from('videos')
@@ -118,10 +150,34 @@ export async function GET(request: NextRequest, { params }: ContextParams) {
       .single()
 
     if (videoError || !video) {
-      return NextResponse.json(
-        { error: 'Video not found' },
-        { status: 404 }
-      )
+      // Fallback to hardcoded data
+      const fallbackVideo = getVideoById(videoId);
+      if (!fallbackVideo) {
+        return NextResponse.json(
+          { error: 'Video not found' },
+          { status: 404 }
+        )
+      }
+      const nodes = await getAllNodes(videoId);
+      return NextResponse.json({
+        video: {
+          id: fallbackVideo.id,
+          title: fallbackVideo.title,
+          duration: fallbackVideo.duration,
+          nodeCount: nodes.length,
+          status: 'ready',
+        },
+        nodes: nodes.map(n => ({
+          id: n.id,
+          order: n.order,
+          title: n.title,
+          startTime: n.start_time,
+          endTime: n.end_time,
+          summary: n.summary,
+          keyConcepts: n.key_concepts,
+          nodeType: n.node_type,
+        })),
+      })
     }
 
     // 获取所有节点

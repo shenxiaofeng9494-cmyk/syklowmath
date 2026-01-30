@@ -152,6 +152,11 @@ export default function WatchPage() {
   const [isMicActive, setIsMicActive] = useState(false);
   const [isAISpeaking, setIsAISpeaking] = useState(false);
 
+  // 必停点介入状态
+  const [isCheckpointIntervening, setIsCheckpointIntervening] = useState(false);
+  const [currentCheckpoint, setCurrentCheckpoint] = useState<any>(null);
+  const [interventionConfig, setInterventionConfig] = useState<any>(null);
+
   // 字幕显示状态
   const [showSubtitles, setShowSubtitles] = useState(true);
 
@@ -248,9 +253,24 @@ export default function WatchPage() {
 
   // 恢复视频（AI 调用 resume_video 时）
   const handleResumeVideo = useCallback(() => {
-    console.log("Resuming video");
+    console.log('[WatchPage] 恢复视频播放');
+
+    // 如果在介入模式中（通过 interventionConfig 判断），切换回实时模式
+    if (interventionConfig) {
+      console.log('[WatchPage] 介入结束：切换回实时模式（doubao_realtime）');
+
+      // 清除介入状态
+      setIsCheckpointIntervening(false);
+      setCurrentCheckpoint(null);
+      setInterventionConfig(null);
+
+      // 切换回实时模式
+      setVoiceBackend("doubao_realtime");
+    }
+
+    // 恢复播放
     videoPlayerRef.current?.play();
-  }, []);
+  }, [interventionConfig]);
 
   // 跳转到指定时间（AI 调用 jump_to_video_node 时）
   const handleJumpToTime = useCallback((time: number) => {
@@ -282,6 +302,63 @@ export default function WatchPage() {
     setCompletedNode(null);
     // 继续播放视频
     videoPlayerRef.current?.play();
+  }, []);
+
+  // 处理必停点介入
+  const handleCheckpointIntervention = useCallback((checkpoint: any) => {
+    console.log('[WatchPage] 必停点介入:', checkpoint.title);
+    setIsCheckpointIntervening(true);
+    setCurrentCheckpoint(checkpoint);
+
+    // 如果对话已经开启，先关闭它（确保会话重新初始化）
+    if (isInConversation) {
+      console.log('[WatchPage] 关闭现有对话，准备重新初始化');
+      setIsInConversation(false);
+    }
+
+    // 设置介入配置
+    setInterventionConfig({
+      checkpoint: checkpoint,
+      isIntervention: true
+    });
+
+    // 切换到精准模式
+    console.log('[WatchPage] 介入模式：切换到精准模式（doubao backend）');
+    setVoiceBackend("doubao");
+
+    // 设置自动启动麦克风
+    setAutoStartMic(true);
+
+    // 延迟开启对话，确保所有状态都已更新
+    setTimeout(() => {
+      console.log('[WatchPage] 开启介入对话');
+      setIsInConversation(true);
+    }, 100);
+  }, [isInConversation]);
+
+  // 结束必停点介入（不切换模式，等学生点继续）
+  const handleEndIntervention = useCallback(() => {
+    console.log('[WatchPage] 结束必停点介入（保持精准模式，等学生点继续）');
+    // 只清理介入状态标记，不清除 interventionConfig，不切换 voiceBackend
+    // 等学生点击"继续"时再切换
+    setIsCheckpointIntervening(false);
+    setCurrentCheckpoint(null);
+    // 注意：不清除 interventionConfig，不切换 voiceBackend
+  }, []);
+
+  // 处理用户手动播放时退出介入模式
+  const handleExitInterventionAndPlay = useCallback(() => {
+    console.log('[WatchPage] 用户手动播放，退出介入模式');
+
+    // 清除介入状态
+    setIsCheckpointIntervening(false);
+    setCurrentCheckpoint(null);
+    setInterventionConfig(null);
+
+    // 切换回实时模式
+    setVoiceBackend("doubao_realtime");
+
+    console.log('[WatchPage] ✅ 已切换回实时模式');
   }, []);
 
   // 全屏切换
@@ -515,18 +592,22 @@ export default function WatchPage() {
                     videoUrl={video.videoUrl}
                     subtitles={subtitles}
                     nodes={nodes}
+                    videoId={videoId}
                     isInConversation={isInConversation}
                     isFullscreen={isFullscreen}
                     showChatInFullscreen={showChatInFullscreen}
                     showSubtitles={showSubtitles}
                     isMicActive={isMicActive}
                     isAISpeaking={isAISpeaking}
+                    interventionConfig={interventionConfig}
                     onToggleConversation={toggleConversation}
                     onToggleFullscreen={toggleFullscreen}
                     onToggleChat={toggleChatInFullscreen}
                     onJoinMeeting={handleJoinMeetingClick}
                     onContextUpdate={handleContextUpdate}
                     onNodeComplete={handleNodeComplete}
+                    onCheckpointIntervention={handleCheckpointIntervention}
+                    onExitIntervention={handleExitInterventionAndPlay}
                     hideControls={true}
                   />
                 </div>
@@ -547,6 +628,7 @@ export default function WatchPage() {
                       autoStart={autoStartMic}
                       voiceMode={voiceMode}
                       voiceBackend={voiceBackend}
+                      interventionConfig={interventionConfig}
                       onVoiceModeChange={setVoiceMode}
                       onVoiceBackendChange={setVoiceBackend}
                       onToggle={toggleConversation}
@@ -554,6 +636,7 @@ export default function WatchPage() {
                       onPauseVideo={handlePauseVideo}
                       onResumeVideo={handleResumeVideo}
                       onJumpToTime={handleJumpToTime}
+                      onEndIntervention={handleEndIntervention}
                       onOpenDrawing={handleOpenDrawing}
                       onCloseDrawing={handleCloseDrawing}
                       onDrawShapes={handleDrawShapes}
@@ -753,6 +836,7 @@ export default function WatchPage() {
                     videoUrl={video.videoUrl}
                     subtitles={subtitles}
                     nodes={nodes}
+                    videoId={videoId}
                     isInConversation={isInConversation}
                     isFullscreen={isFullscreen}
                     showChatInFullscreen={showChatInFullscreen}
@@ -760,6 +844,7 @@ export default function WatchPage() {
                     isDrawingOpen={isDrawingOpen}
                     isMicActive={isMicActive}
                     isAISpeaking={isAISpeaking}
+                    interventionConfig={interventionConfig}
                     onToggleConversation={toggleConversation}
                     onToggleFullscreen={toggleFullscreen}
                     onToggleChat={toggleChatInFullscreen}
@@ -767,6 +852,8 @@ export default function WatchPage() {
                     onJoinMeeting={handleJoinMeetingClick}
                     onContextUpdate={handleContextUpdate}
                     onNodeComplete={handleNodeComplete}
+                    onCheckpointIntervention={handleCheckpointIntervention}
+                    onExitIntervention={handleExitInterventionAndPlay}
                   />
                 </div>
               </div>
@@ -785,6 +872,7 @@ export default function WatchPage() {
                     autoStart={autoStartMic}
                     voiceMode={voiceMode}
                     voiceBackend={voiceBackend}
+                    interventionConfig={interventionConfig}
                     onVoiceModeChange={setVoiceMode}
                     onVoiceBackendChange={setVoiceBackend}
                     onToggle={toggleConversation}
@@ -792,6 +880,7 @@ export default function WatchPage() {
                     onPauseVideo={handlePauseVideo}
                     onResumeVideo={handleResumeVideo}
                     onJumpToTime={handleJumpToTime}
+                    onEndIntervention={handleEndIntervention}
                     onOpenDrawing={handleOpenDrawing}
                     onCloseDrawing={handleCloseDrawing}
                     onDrawShapes={handleDrawShapes}

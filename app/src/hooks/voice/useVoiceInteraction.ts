@@ -5,7 +5,7 @@
  *
  * Main coordinator hook that orchestrates:
  * - Doubao ASR for speech recognition
- * - DeepSeek LLM for AI responses
+ * - Doubao LLM for AI responses
  * - Doubao TTS for speech synthesis
  * - Audio capture and playback
  *
@@ -17,7 +17,7 @@ import { useAudioCapture } from "./useAudioCapture";
 import { useAudioPlayback } from "./useAudioPlayback";
 import { useDoubaoASR } from "./useDoubaoASR";
 import { useDoubaoTTS } from "./useDoubaoTTS";
-import { useDeepSeekLLM } from "./useDeepSeekLLM";
+import { useDoubaoLLM } from "./useDeepSeekLLM";  // 导入新名称
 import type {
   VoiceInteractionState,
   UseVoiceInteractionOptions,
@@ -285,7 +285,7 @@ export function useVoiceInteraction(options: UseVoiceInteractionOptions): UseVoi
   }, []);
 
   // LLM
-  const llm = useDeepSeekLLM({
+  const llm = useDoubaoLLM({
     config: llmConfig,
     onContent: (text) => {
       currentAnswerRef.current += text;

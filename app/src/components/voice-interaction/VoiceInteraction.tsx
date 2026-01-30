@@ -7,9 +7,12 @@ import { useRealtimeVoice } from "@/hooks/useRealtimeVoice";
 import { useVoiceInteraction } from "@/hooks/voice";
 import { useDoubaoRealtimeVoice } from "@/hooks/voice/useDoubaoRealtimeVoice";
 import { useDrawExplainVoice } from "@/hooks/voice/useDrawExplainVoice";
+import { useDoubaoTTS } from "@/hooks/voice/useDoubaoTTS";
+import { useAudioPlayback } from "@/hooks/voice/useAudioPlayback";
 import { DrawingShape } from "@/components/drawing-canvas";
 import { compileDSL, DSLScript } from "@/lib/whiteboard-dsl";
 import { VoiceMode, DrawExplainState, DrawExplainProgress, VoiceBackend } from "@/types/drawing-script";
+import { getFallbackNodes, getFallbackNodeByTime } from "@/data/video-nodes";
 import katex from "katex";
 import "katex/dist/katex.min.css";
 
@@ -36,11 +39,13 @@ interface VoiceInteractionProps {
   embedded?: boolean;            // 是否嵌入在 ChatPanel 中（隐藏外层边框和 header）
   autoStart?: boolean;           // 是否自动开启麦克风（连接成功后自动请求权限）
   voiceMode?: VoiceMode;         // 语音交互模式：realtime 或 draw_explain
+  interventionConfig?: any;      // 介入模式配置
   onVoiceModeChange?: (mode: VoiceMode) => void;  // 模式切换回调
   onToggle: () => void;
   onPauseVideo: () => void;
   onResumeVideo: () => void;
   onJumpToTime?: (time: number) => void;  // 跳转到指定时间
+  onEndIntervention?: () => void;  // 结束介入回调
   // Drawing board callbacks
   onOpenDrawing?: () => void;
   onCloseDrawing?: () => void;
@@ -141,11 +146,13 @@ export function VoiceInteraction({
   embedded = false,
   autoStart = false,
   voiceMode = "realtime",
+  interventionConfig,
   onVoiceModeChange,
   onToggle,
   onPauseVideo,
   onResumeVideo,
   onJumpToTime,
+  onEndIntervention,
   onOpenDrawing,
   onCloseDrawing,
   onDrawShapes,
@@ -276,7 +283,35 @@ export function VoiceInteraction({
 
   const handleToolCall = (tool: string, params: Record<string, unknown>) => {
     console.log("Tool call:", tool, params);
-    if (tool === "use_whiteboard") {
+    if (tool === "reject_out_of_scope") {
+      // Handle out-of-scope rejection
+      const p = params as {
+        reason: string;
+        suggestion: string;
+      };
+      console.log("Out-of-scope question detected:", p.reason);
+
+      // Generate friendly rejection message
+      const rejectionMessage = `这个问题问得挺好的！不过${p.reason}。\n\n${p.suggestion}\n\n关于视频里的内容，你有什么疑问吗？`;
+
+      // Add rejection message to chat
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `assistant-${Date.now()}`,
+          role: "assistant",
+          content: rejectionMessage,
+          timestamp: new Date(),
+        },
+      ]);
+
+      // Clear current answer and go back to listening
+      currentAnswerRef.current = "";
+      setCurrentAnswer("");
+      setStatus("listening");
+
+      return;
+    } else if (tool === "use_whiteboard") {
       const p = params as {
         content_type: "formula" | "graph";
         latex?: string;
@@ -474,6 +509,7 @@ export function VoiceInteraction({
     videoId,
     currentTime,
     subtitles,
+    interventionConfig,  // 传递介入配置
     ...(voiceBackend === "doubao" ? activeCallbacks : noopCallbacks),
   });
 
@@ -501,6 +537,36 @@ export function VoiceInteraction({
       console.error("Draw-explain error:", error);
       setConnectionError(error);
       setStatus("error");
+    },
+  });
+
+  // TTS for intervention mode - 用于播放 AI 的介入问题
+  const interventionAudioPlayback = useAudioPlayback({
+    onPlaybackStart: () => {
+      console.log('[VoiceInteraction] TTS 开始播放介入问题');
+      setStatus("speaking");
+    },
+    onPlaybackEnd: () => {
+      console.log('[VoiceInteraction] TTS 播放完成，等待学生回答');
+      setStatus("listening");
+    },
+  });
+
+  const interventionTTS = useDoubaoTTS({
+    onAudio: (audioData) => {
+      console.log('[VoiceInteraction] 收到TTS音频数据:', audioData.byteLength, 'bytes');
+      interventionAudioPlayback.enqueue(audioData);
+    },
+    onSpeakStart: () => {
+      console.log('[VoiceInteraction] TTS 开始生成语音');
+    },
+    onSpeakEnd: () => {
+      console.log('[VoiceInteraction] TTS 生成完成');
+    },
+    onError: (error) => {
+      console.error('[VoiceInteraction] TTS 错误:', error);
+      setStatus("error");
+      setConnectionError(error.message);
     },
   });
 
@@ -592,6 +658,72 @@ export function VoiceInteraction({
       }
     }
   }, [isConnected, isActive, isListening, autoStart, startListening, voiceMode]);
+
+  // 监听介入配置变化，重新初始化会话并播放介入问题
+  // 使用 ref 来防止重复触发
+  const interventionTriggeredRef = useRef(false);
+
+  useEffect(() => {
+    if (interventionConfig && voiceBackend === "doubao" && voiceInteraction.isConnected && !interventionTriggeredRef.current) {
+      console.log('[VoiceInteraction] 检测到介入配置变化，重新初始化会话');
+      interventionTriggeredRef.current = true;
+
+      // 断开当前会话
+      voiceInteraction.disconnect();
+
+      // 延迟重新连接，确保断开完成
+      setTimeout(async () => {
+        console.log('[VoiceInteraction] 重新连接会话（带介入配置）');
+        await voiceInteraction.connect();
+
+        // 会话重连完成后，播放介入问题
+        console.log('[VoiceInteraction] 进入介入模式:', interventionConfig.checkpoint);
+
+        // 再延迟一下确保连接完全建立
+        setTimeout(async () => {
+          console.log('[VoiceInteraction] 使用 TTS 播放 AI 问题');
+
+          // 构造 AI 的问题文本
+          const checkpoint = interventionConfig.checkpoint;
+          const intro = checkpoint.checkpoint_intro || "";
+          const question = checkpoint.checkpoint_question || "";
+          const questionText = intro && question
+            ? `${intro}\n\n${question}`
+            : (question || intro);
+
+          try {
+            // 添加AI问题到对话框
+            const aiMessage: Message = {
+              id: `intervention-${Date.now()}`,
+              role: "assistant",
+              content: questionText,
+              timestamp: new Date(),
+            };
+            setMessages(prev => [...prev, aiMessage]);
+
+            // 连接 TTS（如果还没连接）
+            if (!interventionTTS.isConnected) {
+              console.log('[VoiceInteraction] 连接 TTS...');
+              await interventionTTS.connect();
+            }
+
+            // 播放问题
+            console.log('[VoiceInteraction] 播放问题:', questionText.substring(0, 50));
+            interventionTTS.speak(questionText);
+
+            // TTS 播放完成后，学生可以直接回答
+            // 介入模式下使用精准模式（ASR + DeepSeek + TTS）
+            // interventionConfig 已经通过 useVoiceInteraction 传递到会话初始化
+            console.log('[VoiceInteraction] 介入模式：使用精准模式（ASR + DeepSeek + TTS）处理学生回答');
+          } catch (error) {
+            console.error('[VoiceInteraction] TTS 播放异常:', error);
+            setStatus("error");
+            setConnectionError(error instanceof Error ? error.message : "TTS 播放失败");
+          }
+        }, 1500);
+      }, 200);
+    }
+  }, [interventionConfig, voiceBackend, voiceInteraction, interventionTTS]);
 
   // 监听开始后更新状态
   useEffect(() => {

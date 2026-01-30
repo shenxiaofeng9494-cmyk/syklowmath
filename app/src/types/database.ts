@@ -49,6 +49,13 @@ export interface Database {
           node_type: 'intro' | 'concept' | 'method' | 'example' | 'pitfall' | 'summary' | 'transition' | 'other' | null
           version: number
           created_by: 'auto' | 'human'
+          // Critical Checkpoint 字段（老师主动介入）
+          is_critical_checkpoint: boolean
+          checkpoint_type: 'motivation' | 'definition' | 'pitfall' | 'summary' | 'verification' | null
+          checkpoint_question: string | null
+          checkpoint_expected_answer: 'yes_no' | 'short_answer' | 'multiple_choice' | null
+          checkpoint_followup: string | null
+          silence_threshold_seconds: number
         }
         Insert: {
           id: string
@@ -68,6 +75,13 @@ export interface Database {
           node_type?: 'concept' | 'method' | 'example' | 'summary' | 'transition' | null
           version?: number
           created_by?: 'auto' | 'human'
+          // Critical Checkpoint 字段
+          is_critical_checkpoint?: boolean
+          checkpoint_type?: 'motivation' | 'definition' | 'pitfall' | 'summary' | 'verification' | null
+          checkpoint_question?: string | null
+          checkpoint_expected_answer?: 'yes_no' | 'short_answer' | 'multiple_choice' | null
+          checkpoint_followup?: string | null
+          silence_threshold_seconds?: number
         }
         Update: Partial<Database['public']['Tables']['video_nodes']['Insert']>
       }

@@ -196,6 +196,7 @@ export interface UseVoiceInteractionOptions {
   videoId?: string;
   currentTime?: number;
   subtitles?: SubtitleCue[];
+  interventionConfig?: any;  // 介入模式配置（包含 checkpoint 信息）
   onSpeechStart?: () => void;
   onSpeechEnd?: () => void;
   onTranscript?: (text: string, isFinal: boolean) => void;

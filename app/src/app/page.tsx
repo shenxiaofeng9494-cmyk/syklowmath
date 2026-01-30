@@ -17,6 +17,19 @@ interface Video {
 // 获取所有视频（包括 Supabase 和硬编码的）
 async function getAllVideos(): Promise<Video[]> {
   try {
+    // 如果 Supabase 未配置，直接返回 fallback 视频
+    if (!supabase) {
+      console.log('Supabase not configured, using fallback videos')
+      return fallbackVideos.map(v => ({
+        id: v.id,
+        title: v.title,
+        description: v.description,
+        videoUrl: v.videoUrl,
+        duration: v.duration,
+        teacher: v.teacher,
+      }))
+    }
+
     // 从 Supabase 获取已上传的视频
     const { data, error } = await supabase
       .from('videos')

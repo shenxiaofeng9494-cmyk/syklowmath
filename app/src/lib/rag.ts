@@ -1,6 +1,7 @@
 import { supabase } from './supabase'
 import { generateQueryEmbedding } from './embedding'
 import type { VideoNode, VideoNodeSearchResult } from '@/types/database'
+import { getFallbackNodes, getFallbackNodeByTime } from '@/data/video-nodes'
 
 /**
  * 通过向量相似度搜索视频节点
@@ -109,6 +110,12 @@ export async function getNodeByTime(
   videoId: string,
   currentTime: number
 ): Promise<VideoNode | null> {
+  // If Supabase is not configured, use fallback data
+  if (!supabase) {
+    console.log('Supabase not configured, using fallback node by time for video:', videoId);
+    return getFallbackNodeByTime(videoId, currentTime);
+  }
+
   // 将浮点数时间转换为整数（数据库字段是整数类型）
   const timeInt = Math.floor(currentTime)
 
@@ -123,10 +130,11 @@ export async function getNodeByTime(
   if (error) {
     // PGRST116 表示没有找到记录，不是真正的错误
     if (error.code === 'PGRST116') {
-      return null
+      // Fallback to hardcoded data
+      return getFallbackNodeByTime(videoId, currentTime);
     }
     console.error('Get node by time error:', error)
-    return null
+    return getFallbackNodeByTime(videoId, currentTime);
   }
 
   return data
@@ -136,6 +144,12 @@ export async function getNodeByTime(
  * 获取视频的所有节点列表
  */
 export async function getAllNodes(videoId: string): Promise<VideoNode[]> {
+  // If Supabase is not configured, use fallback data
+  if (!supabase) {
+    console.log('Supabase not configured, using fallback nodes for video:', videoId);
+    return getFallbackNodes(videoId);
+  }
+
   const { data, error } = await supabase
     .from('video_nodes')
     .select('*')
@@ -144,7 +158,9 @@ export async function getAllNodes(videoId: string): Promise<VideoNode[]> {
 
   if (error) {
     console.error('Get all nodes error:', error)
-    throw new Error(`Failed to get nodes: ${error.message}`)
+    // Fallback to hardcoded data on error
+    console.log('Falling back to hardcoded nodes');
+    return getFallbackNodes(videoId);
   }
 
   return data

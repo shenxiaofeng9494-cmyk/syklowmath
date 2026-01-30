@@ -24,7 +24,8 @@ function parseFrontmatter(content: string): {
   metadata: GuideMetadata;
   body: string;
 } {
-  const frontmatterRegex = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/;
+  // Handle both LF (\n) and CRLF (\r\n) line endings
+  const frontmatterRegex = /^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/;
   const match = content.match(frontmatterRegex);
 
   if (!match) {

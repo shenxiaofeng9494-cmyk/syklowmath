@@ -384,6 +384,7 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
         videoContext: optionsRef.current.videoContext,
         videoId: optionsRef.current.videoId,
         currentTime: optionsRef.current.currentTime,
+        backend: "doubao_realtime", // Specify backend for Doubao Realtime S2S
       }),
     });
 
