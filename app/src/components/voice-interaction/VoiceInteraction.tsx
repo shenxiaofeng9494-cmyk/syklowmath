@@ -251,6 +251,7 @@ export function VoiceInteraction({
   };
 
   const handleAnswer = (text: string) => {
+    console.log('[VoiceInteraction] handleAnswer called with:', text.substring(0, 50), 'current length:', currentAnswerRef.current.length);
     currentAnswerRef.current += text;
     setCurrentAnswer(currentAnswerRef.current);
     setStatus("speaking");
@@ -419,35 +420,42 @@ export function VoiceInteraction({
   };
 
   const handleComplete = () => {
-    console.log("Response complete, back to listening");
-    console.log("handleComplete - currentAnswerRef:", currentAnswerRef.current?.substring(0, 50));
-    console.log("handleComplete - pendingWhiteboardRef:", pendingWhiteboardRef.current);
-    console.log("handleComplete - lastWhiteboardRef:", lastWhiteboardRef.current);
+    console.log("[VoiceInteraction] handleComplete called");
+    console.log("[VoiceInteraction] handleComplete - currentAnswerRef length:", currentAnswerRef.current?.length);
+    console.log("[VoiceInteraction] handleComplete - currentAnswerRef content:", currentAnswerRef.current?.substring(0, 100));
+    console.log("[VoiceInteraction] handleComplete - pendingWhiteboardRef:", pendingWhiteboardRef.current);
+    console.log("[VoiceInteraction] handleComplete - lastWhiteboardRef:", lastWhiteboardRef.current);
 
     // 保存完整回答到消息列表
     if (currentAnswerRef.current) {
       const whiteboard = lastWhiteboardRef.current || pendingWhiteboardRef.current || undefined;
-      console.log("handleComplete - saving message with whiteboard:", whiteboard);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `assistant-${Date.now()}`,
-          role: "assistant",
-          content: currentAnswerRef.current,
-          timestamp: new Date(),
-          whiteboard,
-        },
-      ]);
+      console.log("[VoiceInteraction] handleComplete - saving message to messages array, content length:", currentAnswerRef.current.length);
+      const messageContent = currentAnswerRef.current;
+      setMessages((prev) => {
+        console.log("[VoiceInteraction] handleComplete - setMessages called, prev length:", prev.length);
+        return [
+          ...prev,
+          {
+            id: `assistant-${Date.now()}`,
+            role: "assistant",
+            content: messageContent,
+            timestamp: new Date(),
+            whiteboard,
+          },
+        ];
+      });
       currentAnswerRef.current = "";
       setCurrentAnswer("");
       pendingWhiteboardRef.current = null;
       lastWhiteboardRef.current = null;
       setPendingWhiteboard(null);
+    } else {
+      console.log("[VoiceInteraction] handleComplete - NO content to save (currentAnswerRef is empty)");
     }
     // 如果还有未消耗的白板数据，补到最后一条助教消息上（避免时序问题丢失白板）
     if (pendingWhiteboardRef.current || lastWhiteboardRef.current) {
       const whiteboard = lastWhiteboardRef.current || pendingWhiteboardRef.current;
-      console.log("handleComplete - appending whiteboard to last message:", whiteboard);
+      console.log("[VoiceInteraction] handleComplete - appending whiteboard to last message:", whiteboard);
       setMessages((prev) => {
         if (prev.length === 0) return prev;
         const last = prev[prev.length - 1];
@@ -659,14 +667,65 @@ export function VoiceInteraction({
     }
   }, [isConnected, isActive, isListening, autoStart, startListening, voiceMode]);
 
+  // 监听 voiceBackend 变化，重新连接
+  const prevVoiceBackendRef = useRef(voiceBackend);
+  const isReconnectingRef = useRef(false);
+  useEffect(() => {
+    if (isActive && prevVoiceBackendRef.current !== voiceBackend && !isReconnectingRef.current) {
+      console.log(`[VoiceInteraction] voiceBackend 变化: ${prevVoiceBackendRef.current} -> ${voiceBackend}，重新连接`);
+      const prevBackend = prevVoiceBackendRef.current;
+      prevVoiceBackendRef.current = voiceBackend;
+      isReconnectingRef.current = true;
+
+      // 断开当前连接
+      disconnectRef.current();
+
+      // 延迟重新连接，确保断开完成
+      setTimeout(async () => {
+        console.log(`[VoiceInteraction] 重新连接到 ${voiceBackend} 模式`);
+        try {
+          // 主动调用 connect，不依赖 isActive useEffect
+          await connectRef.current();
+          console.log(`[VoiceInteraction] 重新连接到 ${voiceBackend} 模式成功`);
+        } catch (err) {
+          console.error(`[VoiceInteraction] 重新连接失败:`, err);
+          setConnectionError(err instanceof Error ? err.message : "重新连接失败");
+          setStatus("error");
+        } finally {
+          isReconnectingRef.current = false;
+        }
+      }, 300);
+    } else {
+      prevVoiceBackendRef.current = voiceBackend;
+    }
+  }, [voiceBackend, isActive]);
+
   // 监听介入配置变化，重新初始化会话并播放介入问题
-  // 使用 ref 来防止重复触发
-  const interventionTriggeredRef = useRef(false);
+  // 使用 ref 来追踪当前正在处理的介入配置ID
+  const interventionTriggeredIdRef = useRef<string | null>(null);
+
+  // 当 interventionConfig 清除时，重置触发标记
+  useEffect(() => {
+    if (!interventionConfig) {
+      console.log('[VoiceInteraction] interventionConfig 已清除，重置触发标记');
+      interventionTriggeredIdRef.current = null;
+    }
+  }, [interventionConfig]);
 
   useEffect(() => {
-    if (interventionConfig && voiceBackend === "doubao" && voiceInteraction.isConnected && !interventionTriggeredRef.current) {
-      console.log('[VoiceInteraction] 检测到介入配置变化，重新初始化会话');
-      interventionTriggeredRef.current = true;
+    // 生成当前介入配置的唯一ID
+    const currentInterventionId = interventionConfig?.checkpoint?.id || null;
+
+    // 检查是否应该触发介入
+    const shouldTrigger = interventionConfig
+      && voiceBackend === "doubao"
+      && voiceInteraction.isConnected
+      && currentInterventionId
+      && interventionTriggeredIdRef.current !== currentInterventionId;
+
+    if (shouldTrigger) {
+      console.log('[VoiceInteraction] 检测到介入配置变化，重新初始化会话, checkpointId:', currentInterventionId);
+      interventionTriggeredIdRef.current = currentInterventionId;
 
       // 断开当前会话
       voiceInteraction.disconnect();
@@ -723,7 +782,7 @@ export function VoiceInteraction({
         }, 1500);
       }, 200);
     }
-  }, [interventionConfig, voiceBackend, voiceInteraction, interventionTTS]);
+  }, [interventionConfig, voiceBackend, voiceInteraction.isConnected, interventionTTS]);
 
   // 监听开始后更新状态
   useEffect(() => {

@@ -35,16 +35,21 @@ export async function POST(req: NextRequest) {
     const doubaoApiUrl = `${DOUBAO_API_BASE}/chat/completions`;
 
     // Prepare request to Doubao LLM
-    const doubaoRequest = {
+    // 注意：如果模型不支持 function calling，不要发送 tools 参数
+    const doubaoRequest: Record<string, unknown> = {
       model: DOUBAO_MODEL_ENDPOINT,
       messages: body.messages,
-      tools: body.tools,
-      tool_choice: body.tool_choice || "auto",
       stream: body.stream ?? true,
       max_tokens: body.max_tokens || 2048,
       temperature: body.temperature ?? 0.7,
       top_p: body.top_p ?? 0.9,
     };
+
+    // 只有当 tools 存在且非空时才添加（暂时禁用以支持不支持 function calling 的模型）
+    // if (body.tools && body.tools.length > 0) {
+    //   doubaoRequest.tools = body.tools;
+    //   doubaoRequest.tool_choice = body.tool_choice || "auto";
+    // }
 
     // If not streaming, make a simple request
     if (!doubaoRequest.stream) {

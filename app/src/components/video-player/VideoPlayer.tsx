@@ -26,6 +26,7 @@ interface VideoPlayerProps {
   isAISpeaking?: boolean;
   hideControls?: boolean;
   interventionConfig?: any; // 介入配置，用于检测是否在介入模式
+  isInPrecisionMode?: boolean; // 是否在精准模式（用于播放时切换回实时模式）
   onToggleConversation: () => void;
   onToggleFullscreen?: () => void;
   onToggleChat?: () => void;
@@ -36,6 +37,7 @@ interface VideoPlayerProps {
   onNodeComplete?: (node: VideoNode) => void;
   onCheckpointIntervention?: (checkpoint: DatabaseVideoNode) => void;
   onExitIntervention?: () => void; // 退出介入模式的回调
+  onPlayStateChange?: (isPlaying: boolean) => void; // 播放状态变化回调
 }
 
 export interface VideoPlayerHandle {
@@ -59,6 +61,7 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
     isAISpeaking = false,
     hideControls = false,
     interventionConfig,
+    isInPrecisionMode = false,
     onToggleConversation,
     onToggleFullscreen,
     onToggleChat,
@@ -68,7 +71,8 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
     onJumpToNode,
     onNodeComplete,
     onCheckpointIntervention,
-    onExitIntervention
+    onExitIntervention,
+    onPlayStateChange
   }, ref) {
     const videoRef = useRef<HTMLVideoElement>(null);
     const [isPlaying, setIsPlaying] = useState(false);
@@ -123,6 +127,17 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
         }
       }
     });
+
+    // 监听 interventionConfig 变化：当从有值变为 null 时，结束介入状态
+    const prevInterventionConfigRef = useRef(interventionConfig);
+    useEffect(() => {
+      if (prevInterventionConfigRef.current && !interventionConfig) {
+        console.log('[VideoPlayer] interventionConfig 清除，调用 endIntervention（保留触发记录）');
+        // 传入 true 保留触发记录，防止视频继续播放时立即再次触发同一个介入点
+        endIntervention(true);
+      }
+      prevInterventionConfigRef.current = interventionConfig;
+    }, [interventionConfig, endIntervention]);
 
     // 确保显示第一帧
     useEffect(() => {
@@ -197,15 +212,18 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
         if (isPlaying) {
           videoRef.current.pause();
         } else {
-          // 播放前检查是否在介入模式
-          if (interventionConfig && onExitIntervention) {
-            console.log('[VideoPlayer] 检测到介入模式，先退出介入再播放');
+          // 播放：先清除介入状态，再播放
+          // 传入 true 保留触发记录，防止视频继续播放时立即再次触发同一个介入点
+          endIntervention(true);
+          if (onExitIntervention) {
             onExitIntervention();
+          } else {
+            // 如果没有回调，直接播放
+            videoRef.current.play();
           }
-          videoRef.current.play();
         }
       }
-    }, [isPlaying, interventionConfig, onExitIntervention]);
+    }, [isPlaying, endIntervention, onExitIntervention]);
 
     // 时间更新
     const handleTimeUpdate = () => {
@@ -270,8 +288,16 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
           onTimeUpdate={handleTimeUpdate}
           onLoadedMetadata={handleLoadedMetadata}
           onCanPlay={handleCanPlay}
-          onPlay={() => setIsPlaying(true)}
-          onPause={() => setIsPlaying(false)}
+          onPlay={() => {
+            setIsPlaying(true);
+            onPlayStateChange?.(true);
+            // 注意：不再在这里调用 onExitIntervention
+            // 因为 togglePlay 或全屏播放按钮已经处理了模式切换
+          }}
+          onPause={() => {
+            setIsPlaying(false);
+            onPlayStateChange?.(false);
+          }}
           onClick={togglePlay}
           playsInline
           preload="auto"

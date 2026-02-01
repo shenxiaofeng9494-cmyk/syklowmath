@@ -152,6 +152,9 @@ export default function WatchPage() {
   const [isMicActive, setIsMicActive] = useState(false);
   const [isAISpeaking, setIsAISpeaking] = useState(false);
 
+  // 视频播放状态（用于全屏控制栏显示）
+  const [isVideoPlaying, setIsVideoPlaying] = useState(false);
+
   // 必停点介入状态
   const [isCheckpointIntervening, setIsCheckpointIntervening] = useState(false);
   const [currentCheckpoint, setCurrentCheckpoint] = useState<any>(null);
@@ -322,7 +325,7 @@ export default function WatchPage() {
       isIntervention: true
     });
 
-    // 切换到精准模式
+    // 切换到精准模式（doubao backend）
     console.log('[WatchPage] 介入模式：切换到精准模式（doubao backend）');
     setVoiceBackend("doubao");
 
@@ -346,9 +349,9 @@ export default function WatchPage() {
     // 注意：不清除 interventionConfig，不切换 voiceBackend
   }, []);
 
-  // 处理用户手动播放时退出介入模式
+  // 处理用户手动播放时退出介入模式并播放视频
   const handleExitInterventionAndPlay = useCallback(() => {
-    console.log('[WatchPage] 用户手动播放，退出介入模式');
+    console.log('[WatchPage] handleExitInterventionAndPlay called');
 
     // 清除介入状态
     setIsCheckpointIntervening(false);
@@ -358,7 +361,10 @@ export default function WatchPage() {
     // 切换回实时模式
     setVoiceBackend("doubao_realtime");
 
-    console.log('[WatchPage] ✅ 已切换回实时模式');
+    // 立刻播放视频
+    videoPlayerRef.current?.play();
+
+    console.log('[WatchPage] ✅ 已切换回实时模式并播放视频');
   }, []);
 
   // 全屏切换
@@ -600,6 +606,7 @@ export default function WatchPage() {
                     isMicActive={isMicActive}
                     isAISpeaking={isAISpeaking}
                     interventionConfig={interventionConfig}
+                    isInPrecisionMode={voiceBackend === "doubao"}
                     onToggleConversation={toggleConversation}
                     onToggleFullscreen={toggleFullscreen}
                     onToggleChat={toggleChatInFullscreen}
@@ -608,6 +615,7 @@ export default function WatchPage() {
                     onNodeComplete={handleNodeComplete}
                     onCheckpointIntervention={handleCheckpointIntervention}
                     onExitIntervention={handleExitInterventionAndPlay}
+                    onPlayStateChange={setIsVideoPlaying}
                     hideControls={true}
                   />
                 </div>
@@ -649,7 +657,7 @@ export default function WatchPage() {
               </div>
 
               {/* 全屏模式：底部统一控制栏 */}
-              <div className="bg-black/90 border-t border-white/10 px-4 py-3 shrink-0">
+              <div className="bg-black/90 border-t border-white/10 px-4 py-3 shrink-0 relative z-50">
                 {/* 进度条 */}
                 <div
                   className="relative h-1.5 bg-white/30 rounded-full mb-3 cursor-pointer group"
@@ -713,8 +721,47 @@ export default function WatchPage() {
 
                 {/* 控制按钮行 */}
                 <div className="flex items-center justify-between">
-                {/* 左侧：时间显示 */}
+                {/* 左侧：播放按钮和时间显示 */}
                 <div className="flex items-center gap-4">
+                  {/* 播放/暂停按钮 */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+
+                      // 直接获取 video 元素
+                      const videoEl = document.querySelector('video');
+
+                      if (!videoEl) {
+                        alert('找不到视频元素！');
+                        return;
+                      }
+
+                      if (!videoEl.paused) {
+                        // 视频正在播放，暂停它
+                        videoEl.pause();
+                      } else {
+                        // 视频暂停中，清除状态并播放
+                        setIsCheckpointIntervening(false);
+                        setCurrentCheckpoint(null);
+                        setInterventionConfig(null);
+                        setVoiceBackend("doubao_realtime");
+                        videoEl.play();
+                      }
+                    }}
+                    className="bg-blue-500 hover:bg-blue-600 text-white rounded-full p-3 transition-all shadow-lg"
+                    title={isVideoPlaying ? "暂停" : "播放（点我切换到实时模式）"}
+                  >
+                    {isVideoPlaying ? (
+                      <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
+                      </svg>
+                    ) : (
+                      <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M8 5v14l11-7z" />
+                      </svg>
+                    )}
+                  </button>
                   <div className="bg-white/10 rounded-lg px-3 py-1.5 text-white text-sm font-mono">
                     {formatTime(videoContext.currentTime)} / {formatTime(video.duration)}
                   </div>
@@ -845,6 +892,7 @@ export default function WatchPage() {
                     isMicActive={isMicActive}
                     isAISpeaking={isAISpeaking}
                     interventionConfig={interventionConfig}
+                    isInPrecisionMode={voiceBackend === "doubao"}
                     onToggleConversation={toggleConversation}
                     onToggleFullscreen={toggleFullscreen}
                     onToggleChat={toggleChatInFullscreen}
@@ -854,6 +902,7 @@ export default function WatchPage() {
                     onNodeComplete={handleNodeComplete}
                     onCheckpointIntervention={handleCheckpointIntervention}
                     onExitIntervention={handleExitInterventionAndPlay}
+                    onPlayStateChange={setIsVideoPlaying}
                   />
                 </div>
               </div>
@@ -928,6 +977,27 @@ export default function WatchPage() {
           onDismiss={handleDismissGame}
           onContinue={handleGameContinue}
         />
+      )}
+
+      {/* 紧急播放按钮 - 精准模式下显示在屏幕中央 */}
+      {isFullscreen && voiceBackend === "doubao" && (
+        <div className="fixed inset-0 flex items-center justify-center z-[99999] pointer-events-none">
+          <button
+            onClick={() => {
+              const videoEl = document.querySelector('video');
+              if (videoEl) {
+                setIsCheckpointIntervening(false);
+                setCurrentCheckpoint(null);
+                setInterventionConfig(null);
+                setVoiceBackend("doubao_realtime");
+                videoEl.play();
+              }
+            }}
+            className="pointer-events-auto bg-green-500 hover:bg-green-600 text-white text-2xl font-bold px-8 py-4 rounded-2xl shadow-2xl animate-pulse"
+          >
+            ▶ 点我继续播放
+          </button>
+        </div>
       )}
 
       {/* 语音后端选择弹窗 */}

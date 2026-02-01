@@ -108,6 +108,7 @@ export function useVoiceInteraction(options: UseVoiceInteractionOptions): UseVoi
       console.log("ASR result:", { text, isFinal });
 
       if (isFinal && text) {
+        console.log("[VoiceInteraction] ASR final result, sending to LLM:", text);
         currentTranscriptRef.current = text;
         optionsRef.current.onTranscript?.(text, true);
 
@@ -115,6 +116,7 @@ export function useVoiceInteraction(options: UseVoiceInteractionOptions): UseVoi
         setState("thinking");
         llm.send(text);
       } else {
+        console.log("[VoiceInteraction] ASR interim result:", text);
         optionsRef.current.onTranscript?.(text, false);
       }
     },
@@ -288,12 +290,14 @@ export function useVoiceInteraction(options: UseVoiceInteractionOptions): UseVoi
   const llm = useDoubaoLLM({
     config: llmConfig,
     onContent: (text) => {
+      console.log("[useVoiceInteraction] LLM onContent:", text.substring(0, 30));
       currentAnswerRef.current += text;
       optionsRef.current.onAnswer?.(text);
 
       // Queue text for TTS
       // Split by sentence to reduce latency
       if (text.includes("。") || text.includes("？") || text.includes("！")) {
+        console.log("[useVoiceInteraction] Queueing TTS for sentence, length:", currentAnswerRef.current.length);
         tts.queueText(currentAnswerRef.current);
         currentAnswerRef.current = "";
       }
@@ -303,11 +307,13 @@ export function useVoiceInteraction(options: UseVoiceInteractionOptions): UseVoi
       llm.addToolResult(toolCall.id, result);
     },
     onComplete: () => {
+      console.log("[useVoiceInteraction] LLM onComplete called, remaining text length:", currentAnswerRef.current.length);
       // Speak any remaining text
       if (currentAnswerRef.current) {
         tts.queueText(currentAnswerRef.current);
         currentAnswerRef.current = "";
       }
+      console.log("[useVoiceInteraction] Calling optionsRef.current.onComplete");
       optionsRef.current.onComplete?.();
     },
     onError: (error) => {

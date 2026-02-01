@@ -37,13 +37,13 @@ export function useCheckpointIntervention({
   const hasResetOnRestartRef = useRef<boolean>(false)
 
   // 使用 sessionStorage 持久化已触发的节点ID（按视频ID分组）
-  const getStorageKey = () => {
+  const getStorageKey = useCallback(() => {
     // 从第一个节点获取 video_id，如果没有则使用默认值
     const videoId = nodes.length > 0 && nodes[0].video_id ? nodes[0].video_id : 'default'
     return `checkpoint_triggered_nodes_${videoId}`
-  }
+  }, [nodes])
 
-  const getTriggeredNodes = (): Set<string> => {
+  const getTriggeredNodes = useCallback((): Set<string> => {
     if (typeof window === 'undefined') return new Set()
     try {
       const key = getStorageKey()
@@ -52,9 +52,9 @@ export function useCheckpointIntervention({
     } catch {
       return new Set()
     }
-  }
+  }, [getStorageKey])
 
-  const saveTriggeredNode = (nodeId: string) => {
+  const saveTriggeredNode = useCallback((nodeId: string) => {
     if (typeof window === 'undefined') return
     try {
       const key = getStorageKey()
@@ -64,7 +64,7 @@ export function useCheckpointIntervention({
     } catch (error) {
       console.error('[CheckpointIntervention] 保存触发记录失败:', error)
     }
-  }
+  }, [getStorageKey, getTriggeredNodes])
 
   // 重置用户说话标记
   const resetUserSpoken = useCallback(() => {
@@ -104,11 +104,23 @@ export function useCheckpointIntervention({
     }
   }, [currentTime, isPlaying, getStorageKey])
 
+  // 追踪用户是否 seek 到了节点之前（用于重新触发）
+  const lastCurrentTimeRef = useRef<number>(0)
+
   // 监听视频播放进度
   useEffect(() => {
     if (!isPlaying || nodes.length === 0) {
       return
     }
+
+    // 每10秒打印一次调试信息
+    if (Math.floor(currentTime) % 10 === 0 && Math.floor(currentTime) !== Math.floor(lastCurrentTimeRef.current)) {
+      console.log(`[CheckpointIntervention] 当前时间: ${currentTime.toFixed(1)}s, 节点数: ${nodes.length}`)
+    }
+
+    // 检测用户是否 seek 到了更早的位置（倒退）
+    const isSeekingBack = currentTime < lastCurrentTimeRef.current - 1 // 允许1秒的抖动
+    lastCurrentTimeRef.current = currentTime
 
     // 找到当前播放的节点
     const currentNode = nodes.find(
@@ -121,22 +133,47 @@ export function useCheckpointIntervention({
 
     // 检查是否是必停点
     if (!currentNode.is_critical_checkpoint) {
+      // 每5秒打印一次（避免日志太多）
+      if (Math.floor(currentTime) % 5 === 0 && Math.floor(currentTime) !== Math.floor(lastCurrentTimeRef.current - 1)) {
+        console.log(`[CheckpointIntervention] 节点 "${currentNode.title}" 不是必停点`)
+      }
       return
     }
 
-    // 【方案五】检查是否已经触发过这个节点
-    // 只有当前正在介入同一个节点时，才阻止重复触发
-    const triggeredNodes = getTriggeredNodes()
-    const isCurrentlyIntervening = state.isIntervening && state.currentCheckpoint?.id === currentNode.id
+    // 打印必停点检测信息
+    const timeUntilEndPreview = currentNode.end_time - currentTime
+    console.log(`[CheckpointIntervention] ⭐ 检测到必停点节点 "${currentNode.title}", 距离结束: ${timeUntilEndPreview.toFixed(1)}s`)
 
-    if (triggeredNodes.has(currentNode.id) && isCurrentlyIntervening) {
+    // 如果用户 seek 回到了节点之前，清除该节点的触发记录
+    if (isSeekingBack) {
+      const triggeredNodes = getTriggeredNodes()
+      if (triggeredNodes.has(currentNode.id)) {
+        console.log(`[CheckpointIntervention] 检测到用户 seek 回到节点 "${currentNode.title}" 之前，清除触发记录`)
+        triggeredNodes.delete(currentNode.id)
+        if (typeof window !== 'undefined') {
+          const key = getStorageKey()
+          sessionStorage.setItem(key, JSON.stringify(Array.from(triggeredNodes)))
+        }
+      }
+    }
+
+    // 检查是否正在介入同一个节点（防止重复触发）
+    const isCurrentlyIntervening = state.isIntervening && state.currentCheckpoint?.id === currentNode.id
+    if (isCurrentlyIntervening) {
       console.log(`[CheckpointIntervention] 节点 "${currentNode.title}" 正在介入中，阻止重复触发`)
       return
     }
 
-    // 检查是否接近节点结束（最后0.5秒）
+    // 检查是否已经触发过（sessionStorage 中有记录）
+    const triggeredNodes = getTriggeredNodes()
+    if (triggeredNodes.has(currentNode.id)) {
+      // 只在调试时打印，避免日志过多
+      return
+    }
+
+    // 检查是否接近节点结束（最后1秒，放宽窗口以确保不会错过）
     const timeUntilEnd = currentNode.end_time - currentTime
-    if (timeUntilEnd > 0.5) {
+    if (timeUntilEnd > 1.0) {
       return
     }
 
@@ -154,18 +191,22 @@ export function useCheckpointIntervention({
     })
 
     onIntervention(currentNode)
-  }, [currentTime, isPlaying, nodes, onIntervention])
+  }, [currentTime, isPlaying, nodes, onIntervention, getStorageKey, getTriggeredNodes, saveTriggeredNode, state.isIntervening, state.currentCheckpoint?.id])
 
   // 结束介入
-  const endIntervention = useCallback(() => {
-    // 【方案五】清除当前介入节点的 sessionStorage 记录
-    // 这样用户 seek 回去时可以再次触发
-    if (state.currentCheckpoint && typeof window !== 'undefined') {
+  // keepTriggeredRecord: 是否保留触发记录（默认 false，清除记录以便 seek 回去时可以再次触发）
+  // 当用户按播放键继续时应传 true，防止立即再次触发
+  const endIntervention = useCallback((keepTriggeredRecord: boolean = false) => {
+    // 只有当 keepTriggeredRecord 为 false 时才清除记录
+    // 这样用户 seek 回去时可以再次触发，但按播放键继续时不会重复触发
+    if (!keepTriggeredRecord && state.currentCheckpoint && typeof window !== 'undefined') {
       const key = getStorageKey()
       const triggered = getTriggeredNodes()
       triggered.delete(state.currentCheckpoint.id)
       sessionStorage.setItem(key, JSON.stringify(Array.from(triggered)))
       console.log(`[CheckpointIntervention] 介入结束，清除节点 "${state.currentCheckpoint.title}" 的触发记录`)
+    } else if (keepTriggeredRecord && state.currentCheckpoint) {
+      console.log(`[CheckpointIntervention] 介入结束，保留节点 "${state.currentCheckpoint.title}" 的触发记录（防止重复触发）`)
     }
 
     setState({

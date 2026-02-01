@@ -264,12 +264,14 @@ async function createSession(): Promise<NextResponse> {
 
           if (result?.utterances) {
             for (const utterance of result.utterances) {
+              console.log(`[ASR] Utterance: text="${utterance.text}", definite=${utterance.definite}`);
               session.results.push({
                 text: utterance.text,
                 definite: utterance.definite,
               });
             }
           } else if (result?.text) {
+            console.log(`[ASR] Result text: "${result.text}", definite=true (fallback)`);
             session.results.push({
               text: result.text,
               definite: true,

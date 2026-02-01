@@ -16,6 +16,20 @@ import type { UseVoiceInteractionOptions, ToolDefinition, VideoNode } from "./ty
 
 const REALTIME_PROXY_URL = "/api/voice/doubao-realtime";
 
+// Heartbeat interval to prevent DialogAudioIdleTimeoutError (60s server timeout)
+// Send silent audio every 30 seconds to keep connection alive
+const HEARTBEAT_INTERVAL_MS = 30000;
+
+// Generate a silent audio chunk (200ms of silence at 16kHz, 16-bit PCM)
+function generateSilentAudioChunk(): ArrayBuffer {
+  const sampleRate = 16000;
+  const durationMs = 200;
+  const samples = Math.floor((sampleRate * durationMs) / 1000);
+  const buffer = new ArrayBuffer(samples * 2); // 16-bit = 2 bytes per sample
+  // Buffer is already initialized to zeros, which represents silence
+  return buffer;
+}
+
 // Event IDs from Doubao Realtime API
 const EVENTS = {
   ASR_INFO: 450,
@@ -58,6 +72,7 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
   const sessionIdRef = useRef<string | null>(null);
   const optionsRef = useRef(options);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const heartbeatIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const audioQueueRef = useRef<ArrayBuffer[]>([]);
   const sendingRef = useRef(false);
   const currentAnswerRef = useRef("");
@@ -65,6 +80,7 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
   const sessionConfigRef = useRef<SessionConfig | null>(null);
   const toolDetectionTriggeredRef = useRef(false); // Prevent duplicate detection
   const disconnectingRef = useRef(false); // Prevent audio enqueue during disconnect
+  const lastAudioSentTimeRef = useRef<number>(0); // Track last audio sent time for heartbeat
 
   useEffect(() => {
     optionsRef.current = options;
@@ -345,12 +361,44 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
             audioBase64,
           }),
         });
+        // Update last audio sent time
+        lastAudioSentTimeRef.current = Date.now();
       } catch (error) {
         console.error("Realtime send audio error:", error);
       }
     }
 
     sendingRef.current = false;
+  }, []);
+
+  // Send heartbeat (silent audio) to keep connection alive
+  const sendHeartbeat = useCallback(async () => {
+    if (!sessionIdRef.current || disconnectingRef.current) return;
+
+    // Only send heartbeat if no audio was sent recently
+    const timeSinceLastAudio = Date.now() - lastAudioSentTimeRef.current;
+    if (timeSinceLastAudio < HEARTBEAT_INTERVAL_MS - 5000) {
+      // Audio was sent recently, skip heartbeat
+      return;
+    }
+
+    try {
+      const silentAudio = generateSilentAudioChunk();
+      const audioBase64 = arrayBufferToBase64(silentAudio);
+      await fetch(REALTIME_PROXY_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "audio",
+          sessionId: sessionIdRef.current,
+          audioBase64,
+        }),
+      });
+      lastAudioSentTimeRef.current = Date.now();
+      console.log("Sent heartbeat (silent audio) to keep connection alive");
+    } catch (error) {
+      console.error("Failed to send heartbeat:", error);
+    }
   }, []);
 
   const capture = useAudioCapture({
@@ -422,11 +470,15 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
     if (data.sessionId) {
       sessionIdRef.current = data.sessionId;
       setIsConnected(true);
+      lastAudioSentTimeRef.current = Date.now(); // Initialize last audio time
       pollIntervalRef.current = setInterval(pollEvents, 200);
+      // Start heartbeat to prevent DialogAudioIdleTimeoutError
+      heartbeatIntervalRef.current = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
+      console.log("Started heartbeat interval to keep connection alive");
     } else {
       throw new Error("No session ID returned");
     }
-  }, [pollEvents]);
+  }, [pollEvents, sendHeartbeat]);
 
   const disconnect = useCallback(async () => {
     // Set disconnecting flag first to prevent any new audio from being enqueued
@@ -438,6 +490,12 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = null;
+    }
+
+    // Clear heartbeat interval
+    if (heartbeatIntervalRef.current) {
+      clearInterval(heartbeatIntervalRef.current);
+      heartbeatIntervalRef.current = null;
     }
 
     if (sessionIdRef.current) {
@@ -509,6 +567,9 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
     return () => {
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
+      }
+      if (heartbeatIntervalRef.current) {
+        clearInterval(heartbeatIntervalRef.current);
       }
     };
   }, []);

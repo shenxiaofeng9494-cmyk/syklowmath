@@ -146,6 +146,7 @@ export async function GET(
       node_type: node.node_type,
       is_critical_checkpoint: true,
       checkpoint_type: node.criticalCheckpoint?.interventionType || 'quick_check',
+      checkpoint_intro: node.criticalCheckpoint?.intervention.intro || '',  // 添加 intro 字段
       checkpoint_question: node.criticalCheckpoint?.intervention.question || '',
       checkpoint_expected_answer: 'yes_no',
       checkpoint_followup: node.criticalCheckpoint?.intervention.followUp || null,
