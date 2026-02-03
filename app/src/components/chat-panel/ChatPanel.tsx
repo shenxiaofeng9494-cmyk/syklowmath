@@ -11,6 +11,17 @@ interface SubtitleCue {
   text: string;
 }
 
+// V2 自适应问题类型
+interface AdaptiveQuestion {
+  content: string;
+  style: string;
+  difficulty: number;
+  expectedAnswerType: string;
+  followUp?: string;
+  targetConcept?: string;
+  hints?: string[];
+}
+
 interface ChatPanelProps {
   videoContext: string;
   currentSubtitle: string;
@@ -23,6 +34,9 @@ interface ChatPanelProps {
   voiceMode?: VoiceMode;
   voiceBackend?: VoiceBackend;
   interventionConfig?: any;  // 新增：介入模式配置
+  // V2 自适应提问系统
+  introQuestion?: AdaptiveQuestion | null;
+  onLogMessage?: (role: 'user' | 'assistant', content: string) => void;
   onVoiceModeChange?: (mode: VoiceMode) => void;
   onVoiceBackendChange?: (backend: VoiceBackend) => void;
   onToggle: () => void;
@@ -51,6 +65,9 @@ export function ChatPanel({
   voiceMode = "realtime",
   voiceBackend = "doubao_realtime",
   interventionConfig,
+  // V2 自适应提问系统
+  introQuestion,
+  onLogMessage,
   onVoiceModeChange,
   onVoiceBackendChange,
   onToggle,
@@ -103,6 +120,8 @@ export function ChatPanel({
           voiceBackend={voiceBackend}
           voiceMode={voiceMode}
           interventionConfig={interventionConfig}
+          introQuestion={introQuestion}
+          onLogMessage={onLogMessage}
           onVoiceModeChange={onVoiceModeChange}
           onToggle={onToggle}
           onPauseVideo={onPauseVideo}

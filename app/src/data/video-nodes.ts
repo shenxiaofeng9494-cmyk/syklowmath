@@ -153,10 +153,160 @@ export const demoVideoNodes: VideoNode[] = [
   },
 ];
 
+// Demo video nodes: 一次函数 (总时长 26分33秒 = 1593秒)
+export const linearFunctionNodes: VideoNode[] = [
+  {
+    id: "linear-node-0",
+    order: 0,
+    title: "引入：从实际问题认识一次函数",
+    start_time: 0,
+    end_time: 265,
+    summary: "通过实际问题（如行程问题、话费问题）引入一次函数的概念，让学生理解为什么要学习一次函数。",
+    key_concepts: ["函数", "变量关系", "实际问题"],
+    node_type: "intro",
+
+    // 必停点：确保学生理解为什么需要一次函数
+    criticalCheckpoint: {
+      enabled: true,
+      trigger: "auto",
+      interventionType: "quick_check",
+
+      intervention: {
+        intro: "我停一下。一次函数在生活中非常常见，你得先理解它描述的是什么关系。",
+        question: "我问你：如果话费是 y 元，通话时长是 x 分钟，月租 10 元，每分钟 0.1 元。y 和 x 是什么关系？回答：正比例 / 不是正比例。",
+        expectedAnswers: ["正比例", "不是正比例", "不是"],
+      },
+
+      teacherNote: "引入段必停点 - 确保学生理解一次函数的实际意义",
+      mistakePattern: "学生可能混淆正比例和一次函数的区别"
+    }
+  },
+  {
+    id: "linear-node-1",
+    order: 1,
+    title: "一次函数的定义",
+    start_time: 265,
+    end_time: 530,
+    summary: "定义一次函数：形如 y = kx + b（k≠0）的函数叫做一次函数。其中 k 是一次项系数，b 是常数项。",
+    key_concepts: ["一次函数", "y=kx+b", "k≠0", "一次项系数", "常数项"],
+    node_type: "concept",
+
+    // 必停点：k≠0 的条件
+    criticalCheckpoint: {
+      enabled: true,
+      trigger: "auto",
+      interventionType: "trap_alert",
+
+      intervention: {
+        intro: "我必须在这停一下。很多同学在这里会犯一个错误。",
+        question: "我问你：y = 0·x + 3，也就是 y = 3，是不是一次函数？回答：是 / 不是。",
+        expectedAnswers: ["是", "不是"],
+        followUp: "那 y = 2x + 0，也就是 y = 2x，是不是一次函数？回答：是 / 不是。"
+      },
+
+      teacherNote: "k≠0 是最关键的条件",
+      mistakePattern: "学生会忽略 k≠0 这个条件，误认为 y=3 也是一次函数"
+    }
+  },
+  {
+    id: "linear-node-2",
+    order: 2,
+    title: "正比例函数是特殊的一次函数",
+    start_time: 530,
+    end_time: 750,
+    summary: "当 b=0 时，一次函数 y=kx+b 变成 y=kx，这就是正比例函数。正比例函数是一次函数的特殊情况。",
+    key_concepts: ["正比例函数", "y=kx", "b=0", "特殊情况"],
+    node_type: "concept",
+  },
+  {
+    id: "linear-node-3",
+    order: 3,
+    title: "一次函数的图像",
+    start_time: 750,
+    end_time: 1050,
+    summary: "一次函数 y=kx+b 的图像是一条直线。通过描点法画出一次函数的图像，理解为什么只需要两个点就能确定一条直线。",
+    key_concepts: ["直线", "描点法", "两点确定直线"],
+    node_type: "concept",
+
+    // 必停点：画图方法
+    criticalCheckpoint: {
+      enabled: true,
+      trigger: "auto",
+      interventionType: "quick_check",
+
+      intervention: {
+        intro: "我问你一个问题。",
+        question: "画一次函数的图像，最少需要几个点？回答：1个 / 2个 / 3个。",
+        expectedAnswers: ["1个", "2个", "3个", "1", "2", "3"],
+      },
+
+      teacherNote: "确保学生理解两点确定直线",
+      mistakePattern: "学生可能不理解为什么两个点就够了"
+    }
+  },
+  {
+    id: "linear-node-4",
+    order: 4,
+    title: "k 和 b 的几何意义",
+    start_time: 1050,
+    end_time: 1350,
+    summary: "k 决定直线的倾斜程度（斜率）：k>0 直线上升，k<0 直线下降。b 决定直线与 y 轴的交点（截距）。",
+    key_concepts: ["斜率", "截距", "k的正负", "倾斜程度"],
+    node_type: "concept",
+
+    // 必停点：k 的符号决定增减性
+    criticalCheckpoint: {
+      enabled: true,
+      trigger: "auto",
+      interventionType: "trap_alert",
+
+      intervention: {
+        intro: "这是一次函数的核心。如果你搞混了，后面所有关于图像的题你都会错。",
+        question: "我说一个，你判断：k > 0 时，直线从左到右是上升还是下降？回答：上升 / 下降。",
+        expectedAnswers: ["上升", "下降"],
+        followUp: "那 k < 0 呢？回答：上升 / 下降。"
+      },
+
+      teacherNote: "k 的符号是判断增减性的关键",
+      mistakePattern: "学生会混淆 k 的符号与直线方向的关系"
+    }
+  },
+  {
+    id: "linear-node-5",
+    order: 5,
+    title: "总结：一次函数的性质",
+    start_time: 1350,
+    end_time: 1593,
+    summary: "总结一次函数的定义、图像和性质。强调 k≠0、k 的符号决定增减性、b 的符号决定与 y 轴交点位置。",
+    key_concepts: ["一次函数性质", "增减性", "图像特征"],
+    node_type: "summary",
+
+    // 必停点：终检
+    criticalCheckpoint: {
+      enabled: true,
+      trigger: "auto",
+      interventionType: "final_check",
+
+      intervention: {
+        intro: "最后我点你一次名，快速回答。",
+        question: "一次函数 y = kx + b 中，k 不能等于什么？回答一个数。",
+        expectedAnswers: ["0", "零"],
+        followUp: "如果 k > 0，函数是增函数还是减函数？"
+      },
+
+      teacherNote: "终检：确认学生掌握核心概念",
+      mistakePattern: "快速检验学生是否真的理解了"
+    }
+  },
+];
+
 // Get nodes by video ID
 export function getFallbackNodes(videoId: string): VideoNode[] {
   if (videoId === "demo") {
     return demoVideoNodes;
+  }
+  if (videoId === "linear-function") {
+    return linearFunctionNodes;
   }
   return [];
 }

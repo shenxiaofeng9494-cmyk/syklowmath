@@ -28,6 +28,17 @@ interface SubtitleCue {
   text: string;
 }
 
+// V2 自适应问题类型
+interface AdaptiveQuestion {
+  content: string;
+  style: string;
+  difficulty: number;
+  expectedAnswerType: string;
+  followUp?: string;
+  targetConcept?: string;
+  hints?: string[];
+}
+
 interface VoiceInteractionProps {
   videoContext: string;
   currentSubtitle: string;
@@ -40,6 +51,9 @@ interface VoiceInteractionProps {
   autoStart?: boolean;           // 是否自动开启麦克风（连接成功后自动请求权限）
   voiceMode?: VoiceMode;         // 语音交互模式：realtime 或 draw_explain
   interventionConfig?: any;      // 介入模式配置
+  // V2 自适应提问系统
+  introQuestion?: AdaptiveQuestion | null;  // 开头问题
+  onLogMessage?: (role: 'user' | 'assistant', content: string) => void;  // 记录对话
   onVoiceModeChange?: (mode: VoiceMode) => void;  // 模式切换回调
   onToggle: () => void;
   onPauseVideo: () => void;
@@ -147,6 +161,9 @@ export function VoiceInteraction({
   autoStart = false,
   voiceMode = "realtime",
   interventionConfig,
+  // V2 自适应提问系统
+  introQuestion,
+  onLogMessage,
   onVoiceModeChange,
   onToggle,
   onPauseVideo,
@@ -239,6 +256,8 @@ export function VoiceInteraction({
           timestamp: new Date(),
         },
       ]);
+      // V2: 记录用户消息
+      onLogMessage?.('user', text);
       // 短暂延迟后清空，让用户看到最终结果
       setTimeout(() => setCurrentTranscript(""), 300);
       // 清空回答准备接收新回答
@@ -444,6 +463,8 @@ export function VoiceInteraction({
           },
         ];
       });
+      // V2: 记录 AI 消息
+      onLogMessage?.('assistant', messageContent);
       currentAnswerRef.current = "";
       setCurrentAnswer("");
       pendingWhiteboardRef.current = null;
@@ -666,6 +687,52 @@ export function VoiceInteraction({
       }
     }
   }, [isConnected, isActive, isListening, autoStart, startListening, voiceMode]);
+
+  // V2: 开头问题显示和播报
+  const introQuestionTriggeredRef = useRef(false);
+  useEffect(() => {
+    // 当连接成功、有开头问题、且尚未触发过时，显示并播报
+    if (isConnected && isActive && introQuestion && !introQuestionTriggeredRef.current && !interventionConfig) {
+      introQuestionTriggeredRef.current = true;
+      console.log('[V2] 显示开头问题:', introQuestion.content);
+
+      // 添加到消息列表
+      const questionMessage: Message = {
+        id: `intro-${Date.now()}`,
+        role: "assistant",
+        content: introQuestion.content,
+        timestamp: new Date(),
+      };
+      setMessages(prev => [...prev, questionMessage]);
+
+      // 记录到 V2 系统
+      onLogMessage?.('assistant', introQuestion.content);
+
+      // 使用 TTS 播报（延迟一下确保连接稳定）
+      setTimeout(async () => {
+        try {
+          if (!interventionTTS.isConnected) {
+            console.log('[V2] 连接 TTS...');
+            await interventionTTS.connect();
+          }
+          console.log('[V2] 播报开头问题');
+          setStatus("speaking");
+          interventionTTS.speak(introQuestion.content);
+        } catch (error) {
+          console.error('[V2] TTS 播报失败:', error);
+          // 播报失败不影响功能，用户可以看到文字
+          setStatus("listening");
+        }
+      }, 500);
+    }
+  }, [isConnected, isActive, introQuestion, interventionConfig, onLogMessage, interventionTTS]);
+
+  // 重置开头问题触发标记（当 isActive 变为 false 时）
+  useEffect(() => {
+    if (!isActive) {
+      introQuestionTriggeredRef.current = false;
+    }
+  }, [isActive]);
 
   // 监听 voiceBackend 变化，重新连接
   const prevVoiceBackendRef = useRef(voiceBackend);

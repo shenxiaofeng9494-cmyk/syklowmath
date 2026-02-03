@@ -32,6 +32,15 @@ export const videos: Video[] = [
     // 字幕现在通过 Whisper API 自动生成，这里保留空数组作为后备
     subtitles: [],
   },
+  {
+    id: "linear-function",
+    title: "一次函数",
+    description: "了解一次函数的定义 y=kx+b，理解正比例函数是特殊的一次函数，掌握一次函数的图像和性质",
+    videoUrl: "/videos/linear-function.mp4",
+    duration: 1593, // 26分33秒
+    teacher: "数学老师",
+    subtitles: [],
+  },
 ];
 
 // 根据 ID 获取视频

@@ -9,6 +9,7 @@ import { GamePrompt } from "@/components/game-player/GamePrompt";
 import { DrawingOverlay, TldrawCanvasHandle, DrawingShape } from "@/components/drawing-canvas";
 import { getVideoById, SubtitleCue } from "@/data/videos";
 import { VoiceMode, VoiceBackend } from "@/types/drawing-script";
+import { useAdaptiveQuestions } from "@/hooks/useAdaptiveQuestions";
 
 interface ClientVideo {
   id: string;
@@ -45,6 +46,17 @@ interface TranscribeResponse {
   subtitles: SubtitleCue[];
 }
 
+// 生成或获取学生ID（使用 localStorage 持久化）
+function getStudentId(): string {
+  if (typeof window === 'undefined') return 'anonymous';
+  let studentId = localStorage.getItem('mathtalk_student_id');
+  if (!studentId) {
+    studentId = `student-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    localStorage.setItem('mathtalk_student_id', studentId);
+  }
+  return studentId;
+}
+
 export default function WatchPage() {
   const params = useParams();
   const videoId = params.id as string;
@@ -53,6 +65,24 @@ export default function WatchPage() {
   const [video, setVideo] = useState<ClientVideo | null>(null);
   const [videoLoading, setVideoLoading] = useState(true);
   const [videoError, setVideoError] = useState<string>("");
+
+  // V2 自适应提问系统
+  const [studentId] = useState(() => getStudentId());
+  const {
+    introQuestions,
+    currentQuestion,
+    isLoading: isAdaptiveLoading,
+    fetchIntroQuestions,
+    fetchCheckpointQuestion,
+    submitLearningData,
+    logMessage,
+    logCheckpointResponse,
+  } = useAdaptiveQuestions({
+    studentId,
+    videoId,
+    videoTitle: video?.title,
+    onError: (error) => console.error('[AdaptiveQuestions] Error:', error),
+  });
 
   // 加载视频数据
   useEffect(() => {
@@ -329,6 +359,17 @@ export default function WatchPage() {
     console.log('[WatchPage] 介入模式：切换到精准模式（doubao backend）');
     setVoiceBackend("doubao");
 
+    // 获取自适应检查点问题（V2 系统）
+    fetchCheckpointQuestion({
+      title: checkpoint.title,
+      summary: checkpoint.summary,
+      keyConcepts: checkpoint.keyConcepts,
+    }).then((question) => {
+      if (question) {
+        console.log('[V2] 检查点问题已生成:', question.content);
+      }
+    });
+
     // 设置自动启动麦克风
     setAutoStartMic(true);
 
@@ -337,7 +378,7 @@ export default function WatchPage() {
       console.log('[WatchPage] 开启介入对话');
       setIsInConversation(true);
     }, 100);
-  }, [isInConversation]);
+  }, [isInConversation, fetchCheckpointQuestion]);
 
   // 结束必停点介入（不切换模式，等学生点继续）
   const handleEndIntervention = useCallback(() => {
@@ -420,13 +461,25 @@ export default function WatchPage() {
       console.error("Failed to enter fullscreen:", e);
     }
 
-    // 4. 加入对话（延迟一点确保全屏状态已更新）
+    // 4. 获取自适应开头问题（V2 系统）
+    const currentNode = nodes.length > 0 ? nodes[0] : undefined;
+    fetchIntroQuestions({
+      nodeTitle: currentNode?.title,
+      nodeSummary: undefined,
+      keyConcepts: undefined,
+    }).then((questions) => {
+      if (questions && questions.length > 0) {
+        console.log('[V2] 开头问题已生成:', questions.map(q => q.content));
+      }
+    });
+
+    // 5. 加入对话（延迟一点确保全屏状态已更新）
     setTimeout(() => {
       setIsInConversation(true);
-      // 5. 开始播放视频
+      // 6. 开始播放视频
       videoPlayerRef.current?.play();
     }, 100);
-  }, []);
+  }, [nodes, fetchIntroQuestions]);
 
   // 画板操作
   const handleOpenDrawing = useCallback(() => {
@@ -484,12 +537,29 @@ export default function WatchPage() {
   }, []);
 
   // 退出通话 - 只结束对话，不退出全屏
-  const handleEndCall = useCallback(() => {
+  const handleEndCall = useCallback(async () => {
+    // V2: 提交学习数据进行分析
+    console.log('[V2] 退出对话，提交学习数据分析...');
+    try {
+      const analysis = await submitLearningData({
+        videoNodes: nodes.map(n => n.title),
+      });
+      if (analysis) {
+        console.log('[V2] 学习分析完成:', {
+          overallLevel: analysis.overallLevel,
+          problemTags: analysis.problemTags,
+          nextStrategy: analysis.nextStrategy,
+        });
+      }
+    } catch (error) {
+      console.error('[V2] 学习分析失败:', error);
+    }
+
     setIsInConversation(false);
     setShowChatInFullscreen(false);
     setIsMicActive(false);
     setAutoStartMic(false);
-  }, []);
+  }, [submitLearningData, nodes]);
 
 
   // 视频加载中
@@ -560,12 +630,7 @@ export default function WatchPage() {
           </div>
         )}
 
-        {subtitleStatus === "error" && (
-          <div className="mb-4 p-4 bg-red-500/10 border border-red-500/20 rounded-lg">
-            <p className="text-red-300">字幕加载失败: {subtitleError}</p>
-            <p className="text-red-400 text-sm mt-1">你仍然可以观看视频和提问，但AI可能无法知道当前视频内容</p>
-          </div>
-        )}
+        {/* 字幕加载失败时不显示错误，静默降级 */}
 
         {subtitleStatus === "ready" && !isInConversation && (
           <div className="mb-4 p-3 bg-green-500/10 border border-green-500/20 rounded-lg flex items-center gap-2">
@@ -637,6 +702,8 @@ export default function WatchPage() {
                       voiceMode={voiceMode}
                       voiceBackend={voiceBackend}
                       interventionConfig={interventionConfig}
+                      introQuestion={currentQuestion}
+                      onLogMessage={logMessage}
                       onVoiceModeChange={setVoiceMode}
                       onVoiceBackendChange={setVoiceBackend}
                       onToggle={toggleConversation}
@@ -922,6 +989,8 @@ export default function WatchPage() {
                     voiceMode={voiceMode}
                     voiceBackend={voiceBackend}
                     interventionConfig={interventionConfig}
+                    introQuestion={currentQuestion}
+                    onLogMessage={logMessage}
                     onVoiceModeChange={setVoiceMode}
                     onVoiceBackendChange={setVoiceBackend}
                     onToggle={toggleConversation}

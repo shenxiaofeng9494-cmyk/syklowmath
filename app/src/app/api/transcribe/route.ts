@@ -135,6 +135,17 @@ export async function POST(req: NextRequest) {
       subtitleData = await transcribeWithAliyun(videoId, fileUrl);
     } else {
       // 使用 Whisper（本地文件）
+      // 如果没有 API key，返回空字幕而不是报错
+      if (!OPENAI_API_KEY) {
+        console.log(`[Transcribe] No OpenAI API key configured, returning empty subtitles for ${videoId}`);
+        return NextResponse.json({
+          videoId,
+          language: "zh",
+          duration: 0,
+          fullText: "",
+          subtitles: [],
+        });
+      }
       console.log(`[Transcribe] Using OpenAI Whisper for ${videoId}`);
       subtitleData = await transcribeWithWhisper(videoId);
     }
