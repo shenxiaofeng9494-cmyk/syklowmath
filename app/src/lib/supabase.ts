@@ -12,6 +12,13 @@ if (!supabaseUrl || !supabaseAnonKey) {
 
 // 注意：这里不使用类型参数，因为 pgvector 的向量类型在 Supabase SDK 中不被正确支持
 // 类型安全通过 database.ts 中的类型定义在应用层保证
-export const supabase = (supabaseUrl && supabaseAnonKey)
+const _supabase = (supabaseUrl && supabaseAnonKey)
   ? createClient(supabaseUrl, supabaseAnonKey)
   : null
+
+// 导出可能为 null 的版本（用于条件检查）
+export { _supabase as supabaseClient }
+
+// 导出非 null 版本（大部分 API 路由使用）
+// 在 Supabase 未配置时调用会抛出错误，但生产环境始终配置
+export const supabase = _supabase!
