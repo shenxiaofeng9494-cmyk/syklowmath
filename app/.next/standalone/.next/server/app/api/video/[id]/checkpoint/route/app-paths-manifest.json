@@ -1,0 +1,3 @@
+{
+  "/api/video/[id]/checkpoint/route": "app/api/video/[id]/checkpoint/route.js"
+}

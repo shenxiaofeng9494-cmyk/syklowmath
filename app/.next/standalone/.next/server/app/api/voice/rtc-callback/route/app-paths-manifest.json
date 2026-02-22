@@ -1,0 +1,3 @@
+{
+  "/api/voice/rtc-callback/route": "app/api/voice/rtc-callback/route.js"
+}

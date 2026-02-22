@@ -1,0 +1,3 @@
+{
+  "/api/voice/asr/stream/route": "app/api/voice/asr/stream/route.js"
+}

@@ -1,0 +1,3 @@
+{
+  "/api/game/batch-generate/route": "app/api/game/batch-generate/route.js"
+}

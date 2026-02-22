@@ -1,0 +1,3 @@
+{
+  "/api/voice/tool-detect/route": "app/api/voice/tool-detect/route.js"
+}

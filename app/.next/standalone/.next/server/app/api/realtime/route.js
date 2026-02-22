@@ -1,0 +1,12 @@
+var R=require("../../../chunks/[turbopack]_runtime.js")("server/app/api/realtime/route.js")
+R.c("server/chunks/node_modules_next_dist_esm_build_templates_app-route_905a1868.js")
+R.c("server/chunks/src_lib_auth_jwt_ts_234118e4._.js")
+R.c("server/chunks/node_modules_next_f5199d09._.js")
+R.c("server/chunks/[root-of-the-server]__913bfc41._.js")
+R.c("server/chunks/node_modules_@supabase_supabase-js_dist_index_mjs_669a44bf._.js")
+R.c("server/chunks/node_modules_openai_index_mjs_88cf4560._.js")
+R.c("server/chunks/[root-of-the-server]__8f5ebbc3._.js")
+R.c("server/chunks/node_modules_next_1402a1da._.js")
+R.c("server/chunks/_next-internal_server_app_api_realtime_route_actions_e2df5ed8.js")
+R.m(249602)
+module.exports=R.m(249602).exports

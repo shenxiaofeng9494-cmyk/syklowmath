@@ -1,0 +1,3 @@
+{
+  "/api/voice/rtc-token/route": "app/api/voice/rtc-token/route.js"
+}

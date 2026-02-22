@@ -1,0 +1,8 @@
+{
+  "app": {
+    "[project]/src/app/watch/[id]/page": []
+  },
+  "appUsingSizeAdjust": false,
+  "pages": {},
+  "pagesUsingSizeAdjust": false
+}
