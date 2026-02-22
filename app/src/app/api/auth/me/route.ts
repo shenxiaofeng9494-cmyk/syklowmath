@@ -19,7 +19,7 @@ export async function GET() {
     if (supabaseAdmin) {
       const { data: user } = await supabaseAdmin
         .from('users')
-        .select('id, phone, nickname')
+        .select('id, phone, username, nickname')
         .eq('id', payload.userId)
         .single()
 
@@ -32,7 +32,8 @@ export async function GET() {
     return NextResponse.json({
       user: {
         id: payload.userId,
-        phone: payload.phone,
+        phone: payload.phone || null,
+        username: null,
         nickname: null,
       },
     })

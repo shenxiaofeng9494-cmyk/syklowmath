@@ -11,7 +11,7 @@ function getSecretKey() {
 
 export interface TokenPayload {
   userId: string
-  phone: string
+  phone?: string
 }
 
 export async function signToken(payload: TokenPayload): Promise<string> {
@@ -27,7 +27,7 @@ export async function verifyToken(token: string): Promise<TokenPayload | null> {
     const { payload } = await jwtVerify(token, getSecretKey())
     return {
       userId: payload.userId as string,
-      phone: payload.phone as string,
+      phone: payload.phone as string | undefined,
     }
   } catch {
     return null

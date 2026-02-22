@@ -10,13 +10,16 @@ export function UserMenu() {
 
   if (!user) return null
 
-  // 显示手机号（中间4位隐藏）
-  const maskedPhone = user.phone.replace(/(\d{3})\d{4}(\d{4})/, '$1****$2')
+  // 显示优先级：昵称 > 手机号（脱敏） > 用户名
+  const maskedPhone = user.phone
+    ? user.phone.replace(/(\d{3})\d{4}(\d{4})/, '$1****$2')
+    : null
+  const displayName = user.nickname || maskedPhone || user.username || '用户'
 
   return (
     <div className="flex items-center gap-3">
       <span className="text-sm text-muted-foreground">
-        {user.nickname || maskedPhone}
+        {displayName}
       </span>
       <Button variant="ghost" size="sm" onClick={logout}>
         退出

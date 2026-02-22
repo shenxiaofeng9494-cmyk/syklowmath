@@ -3,6 +3,7 @@ import { videos as fallbackVideos } from "@/data/videos";
 import { supabase } from "@/lib/supabase";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { UserMenu } from "@/components/auth/UserMenu";
+import { StudentProfileCard } from "@/components/auth/StudentProfileCard";
 import type { Video as DBVideo } from "@/types/database";
 
 // 视频数据格式（兼容旧格式）
@@ -101,6 +102,9 @@ export default async function Home() {
             遇到不懂的地方？暂停视频，用语音提问，AI老师立刻为你解答
           </p>
         </section>
+
+        {/* Student Profile Card */}
+        <StudentProfileCard />
 
         {/* Video List */}
         <section>

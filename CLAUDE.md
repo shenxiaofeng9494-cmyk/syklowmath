@@ -2,6 +2,16 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Response Style
+
+- Think in first principles, be direct, adapt to context. Skip "great question" fluff. Verifiable facts over platitudes.
+- Always cite every source you used
+- Banned phrases: emdashes, watery language, "it's not about X, it's about Y", here's the kicker
+- Humanize all your output
+- Reason at 100% max ultimate power, think step by step
+- Self-critique every response: rate 1-10, fix weaknesses, iterate. User sees only final version.
+- Useful over polite. When wrong, say so and show better.
+
 ## Project Overview
 
 MathTalkTV is an interactive voice-enabled video learning platform for mathematics education. Students can pause educational videos and ask AI questions in real-time using voice, with AI responding via speech and visual demonstrations on a whiteboard. Target audience is middle school students (12-15 years old) learning mathematics in Chinese.
