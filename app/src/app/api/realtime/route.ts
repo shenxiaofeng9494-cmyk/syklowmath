@@ -1,6 +1,50 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateGuidesIndex, getAllGuidesContent } from "@/tool-guides/loader";
 import { getNodeByTime, getAllNodes } from "@/lib/rag";
+import memory from "@/lib/agents/memory";
+import { getAuthUser } from "@/lib/auth/require-auth";
+import { unwrapOr } from "@/lib/agents/types";
+import type { StudentProfile } from "@/lib/agents/types";
+
+/**
+ * 生成学生画像的教学策略提示词
+ */
+function generateProfilePrompt(profile: StudentProfile): string {
+  const level = profile.overall_level;
+  const tags = profile.recent_problem_tags || [];
+  const trend = profile.recent_trend;
+
+  let prompt = `\n\n## 【V2自适应】当前学生画像\n`;
+  prompt += `- 整体水平：${Math.round(level)}/100`;
+  prompt += trend === 'improving' ? '（进步中 ↑）' :
+            trend === 'declining' ? '（退步中 ↓）' : '（稳定）';
+  prompt += `\n- 偏好提问风格：${profile.preferred_style}\n`;
+
+  if (tags.length > 0) {
+    prompt += `- 历史问题标签：${tags.join('、')}\n`;
+  }
+
+  prompt += `\n**针对性教学策略：**\n`;
+
+  if (level < 40) {
+    prompt += `- 学生水平较弱，多鼓励，用简单例子\n`;
+    prompt += `- 优先用选择题，降低回答压力\n`;
+  } else if (level > 70) {
+    prompt += `- 学生水平较高，可以提有挑战的问题\n`;
+  }
+
+  if (tags.includes('假懂')) {
+    prompt += `- ⚠️ 学生有【假懂】倾向：追问"为什么"\n`;
+  }
+  if (tags.includes('易走神')) {
+    prompt += `- ⚠️ 学生【容易走神】：保持简短互动\n`;
+  }
+  if (tags.includes('条件遗漏')) {
+    prompt += `- ⚠️ 学生【容易遗漏条件】：强调前提条件\n`;
+  }
+
+  return prompt;
+}
 
 // 数学术语提示词，用于提高语音识别准确率
 const MATH_TERMS_PROMPT = `一元二次方程、二次函数、配方法、求根公式、判别式、delta、根与系数的关系、韦达定理、
@@ -298,7 +342,12 @@ const TOOLS = [
 
 export async function POST(req: NextRequest) {
   try {
-    const { videoContext, videoId, currentTime } = await req.json();
+    const body = await req.json();
+    const { videoContext, videoId, currentTime } = body;
+
+    // 服务端鉴权：从 cookie 取真实用户 ID，忽略客户端传的 studentId
+    const authUser = await getAuthUser();
+    const studentId = authUser?.userId ?? body.studentId;
 
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
@@ -361,6 +410,36 @@ export async function POST(req: NextRequest) {
     // 使用前端传来的字幕上下文（分层：最近5秒精准 + 前30秒背景）
     if (videoContext) {
       instructions += `\n\n## 学生刚才听到的内容\n\n${videoContext}\n\n**重要提示**：当学生说"这个"、"这里"、"刚才那个"等指代词时，优先理解为【刚才说的】部分的内容。`;
+    }
+
+    // V2 自适应：注入学生画像
+    if (studentId) {
+      try {
+        const profileResult = await memory.getOrCreateProfile(studentId);
+        const defaultProfile: StudentProfile = {
+          student_id: studentId,
+          overall_level: 50,
+          dimensions: {
+            conceptUnderstanding: 50,
+            procedureExecution: 50,
+            reasoning: 50,
+            transfer: 50,
+            selfExplanation: 50,
+          },
+          preferred_style: '参与感选择',
+          total_sessions: 0,
+          recent_trend: 'stable',
+          knowledge_gaps: [],
+          recent_problem_tags: [],
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        const profile = unwrapOr(profileResult, defaultProfile);
+        instructions += generateProfilePrompt(profile);
+        console.log(`[Realtime API] V2 画像已注入: level=${profile.overall_level}`);
+      } catch (profileError) {
+        console.warn('[Realtime API] 获取学生画像失败:', profileError);
+      }
     }
 
     // 创建 Realtime Session

@@ -7,6 +7,7 @@ import memory from '../memory';
 import learningAnalyzer from '../learning-analyzer';
 import questionGenerator from '../question-generator';
 import intentGateway from '../intent-gateway';
+import { unwrapOr } from '../types';
 import type {
   OrchestratorRequest,
   OrchestratorResponse,
@@ -60,8 +61,13 @@ async function handleEnterVideo(
   videoId: string,
   payload: OrchestratorRequest['payload']
 ): Promise<OrchestratorResponse> {
-  // 1. 获取或创建学生画像
-  const profile = await memory.getOrCreateProfile(studentId);
+  // 1. 获取或创建学生画像（使用 Result 类型处理）
+  const profileResult = await memory.getOrCreateProfile(studentId);
+  const profile = unwrapOr(profileResult, createDefaultProfile(studentId));
+
+  if (!profileResult.ok) {
+    console.warn(`[Orchestrator] Profile fetch warning: ${profileResult.error}, using fallback`);
+  }
   console.log(`[Orchestrator] Student profile loaded, level: ${profile.overall_level}`);
 
   // 2. 获取视频信息（从 payload 或使用默认值）
@@ -125,27 +131,40 @@ async function handleVideoEnded(
 
   console.log(`[Orchestrator] Analysis complete, level: ${analysis.overallLevel}`);
 
-  // 2. 保存学习快照
-  await memory.saveSnapshot(studentId, videoId, analysis);
+  // 2. 保存学习快照（Result 类型，记录但不阻塞）
+  const snapshotResult = await memory.saveSnapshot(studentId, videoId, analysis);
+  if (!snapshotResult.ok) {
+    console.warn(`[Orchestrator] Snapshot save warning: ${snapshotResult.error}`);
+  }
 
   // 3. 更新学生画像
-  await memory.updateProfile(studentId, analysis);
+  const updateResult = await memory.updateProfile(studentId, analysis);
+  if (!updateResult.ok) {
+    console.warn(`[Orchestrator] Profile update warning: ${updateResult.error}`);
+  }
 
   // 4. 保存情景记忆（如果有重要事件）
   if (analysis.shouldSaveEpisode && analysis.episodeEvent) {
-    await memory.saveEpisode(studentId, analysis.episodeEvent, videoId);
-    console.log(`[Orchestrator] Saved episode: ${analysis.episodeEvent}`);
+    const episodeResult = await memory.saveEpisode(studentId, analysis.episodeEvent, videoId);
+    if (episodeResult.ok) {
+      console.log(`[Orchestrator] Saved episode: ${analysis.episodeEvent}`);
+    } else {
+      console.warn(`[Orchestrator] Episode save warning: ${episodeResult.error}`);
+    }
   }
 
   // 5. 保存对话日志
   if (conversationLog.length > 0) {
-    await memory.saveConversationLog({
+    const logResult = await memory.saveConversationLog({
       studentId,
       videoId,
       sessionId: payload?.sessionId || `session-${Date.now()}`,
       messages: conversationLog,
       checkpointResponses,
     });
+    if (!logResult.ok) {
+      console.warn(`[Orchestrator] Conversation log save warning: ${logResult.error}`);
+    }
   }
 
   return {
@@ -166,8 +185,9 @@ async function handleCheckpointReached(
   videoId: string,
   payload: OrchestratorRequest['payload']
 ): Promise<OrchestratorResponse> {
-  // 1. 获取学生画像
-  const profile = await memory.getOrCreateProfile(studentId);
+  // 1. 获取学生画像（使用 Result 类型处理）
+  const profileResult = await memory.getOrCreateProfile(studentId);
+  const profile = unwrapOr(profileResult, createDefaultProfile(studentId));
 
   // 2. 生成中途问题
   const result = await questionGenerator.generate({
@@ -243,6 +263,30 @@ export async function quickIntentCheck(
   return {
     shouldRespond: result.action === 'RESPOND',
     reason: result.reason,
+  };
+}
+
+/**
+ * 创建默认学生画像
+ */
+function createDefaultProfile(studentId: string): StudentProfile {
+  return {
+    student_id: studentId,
+    overall_level: 50,
+    dimensions: {
+      conceptUnderstanding: 50,
+      procedureExecution: 50,
+      reasoning: 50,
+      transfer: 50,
+      selfExplanation: 50,
+    },
+    preferred_style: '参与感选择',
+    total_sessions: 0,
+    recent_trend: 'stable',
+    knowledge_gaps: [],
+    recent_problem_tags: [],
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
   };
 }
 

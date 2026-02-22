@@ -30,6 +30,7 @@ export function useAudioCapture(options: UseAudioCaptureOptions): UseAudioCaptur
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const isCapturingRef = useRef(false);
   const optionsRef = useRef(options);
 
   // Keep options ref up to date
@@ -38,7 +39,8 @@ export function useAudioCapture(options: UseAudioCaptureOptions): UseAudioCaptur
   }, [options]);
 
   const start = useCallback(async () => {
-    if (isCapturing) {
+    // Use ref for guard check to avoid stale closure issues (React Strict Mode)
+    if (isCapturingRef.current) {
       console.log("Audio capture already running");
       return;
     }
@@ -102,6 +104,7 @@ export function useAudioCapture(options: UseAudioCaptureOptions): UseAudioCaptur
       sourceNode.connect(workletNode);
       // Don't connect workletNode to destination - we don't want to hear ourselves
 
+      isCapturingRef.current = true;
       setIsCapturing(true);
       console.log("Audio capture started with AudioWorklet");
     } catch (error) {
@@ -110,7 +113,7 @@ export function useAudioCapture(options: UseAudioCaptureOptions): UseAudioCaptur
         error instanceof Error ? error : new Error("Failed to start audio capture")
       );
     }
-  }, [isCapturing]);
+  }, []);
 
   // Fallback using ScriptProcessor for browsers without AudioWorklet support
   const startWithScriptProcessor = async (
@@ -184,12 +187,12 @@ export function useAudioCapture(options: UseAudioCaptureOptions): UseAudioCaptur
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (audioContextRef.current as any)._scriptProcessor = scriptProcessor;
 
+    isCapturingRef.current = true;
     setIsCapturing(true);
     console.log("Audio capture started with ScriptProcessor fallback");
   };
 
   const stop = useCallback(() => {
-    console.log("useAudioCapture stop called, isCapturing:", isCapturing);
     // Only log if actually capturing
     if (mediaStreamRef.current || workletNodeRef.current || audioContextRef.current) {
       console.log("Stopping audio capture...");
@@ -228,12 +231,13 @@ export function useAudioCapture(options: UseAudioCaptureOptions): UseAudioCaptur
       audioContextRef.current = null;
     }
 
-    const wasCapturing = isCapturing;
+    const wasCapturing = isCapturingRef.current;
+    isCapturingRef.current = false;
     setIsCapturing(false);
     if (wasCapturing) {
       console.log("Audio capture stopped");
     }
-  }, [isCapturing]);
+  }, []);
 
   // Store stop in ref for cleanup
   const stopRef = useRef(stop);

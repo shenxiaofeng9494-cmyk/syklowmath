@@ -7,16 +7,19 @@
  * Uses backend proxy for WebSocket connection since browser WebSocket
  * cannot set custom HTTP headers required by Doubao API.
  *
- * Protocol flow:
+ * Optimized protocol flow (v2):
  * 1. Create session via POST /api/voice/asr (action: create)
- * 2. Send audio chunks via POST /api/voice/asr (action: audio)
- * 3. Poll for results via POST /api/voice/asr (action: results)
+ * 2. Subscribe to results via SSE  GET /api/voice/asr/stream?sessionId=xxx
+ * 3. Send audio chunks via POST /api/voice/asr (binary octet-stream)
  * 4. End session via POST /api/voice/asr (action: end)
+ *
+ * Key improvements over v1:
+ * - SSE push replaces 200ms polling (eliminates ~100ms average latency)
+ * - Binary audio replaces base64 JSON (saves ~33% bandwidth)
  */
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import { ASR_PROXY_URL, ASR_AUDIO_CHUNK } from "./constants";
-import { arrayBufferToBase64 } from "./doubao-protocol";
+import { ASR_PROXY_URL, ASR_STREAM_URL } from "./constants";
 
 interface UseDoubaoASROptions {
   onResult?: (text: string, isFinal: boolean) => void;
@@ -40,6 +43,7 @@ export function useDoubaoASR(options: UseDoubaoASROptions): UseDoubaoASRReturn {
 
   const sessionIdRef = useRef<string | null>(null);
   const optionsRef = useRef(options);
+  const sseAbortRef = useRef<AbortController | null>(null);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const audioQueueRef = useRef<ArrayBuffer[]>([]);
   const sendingRef = useRef(false);
@@ -49,7 +53,7 @@ export function useDoubaoASR(options: UseDoubaoASROptions): UseDoubaoASRReturn {
     optionsRef.current = options;
   }, [options]);
 
-  // Poll for results from the backend
+  // Poll for ASR results (fallback when SSE is unavailable)
   const pollResults = useCallback(async () => {
     if (!sessionIdRef.current) return;
 
@@ -63,40 +67,131 @@ export function useDoubaoASR(options: UseDoubaoASROptions): UseDoubaoASRReturn {
         }),
       });
 
-      if (!response.ok) {
-        throw new Error(`Poll failed: ${response.status}`);
-      }
+      if (!response.ok) return;
 
       const data = await response.json();
 
-      if (data.error) {
-        console.error("ASR error:", data.error);
-        optionsRef.current.onError?.(new Error(data.error));
-      }
-
       if (data.results && data.results.length > 0) {
         for (const result of data.results) {
-          console.log("ASR result:", result);
+          console.log("ASR poll result:", result);
           optionsRef.current.onResult?.(result.text, result.definite);
         }
       }
 
+      if (data.error) {
+        console.error("ASR poll error:", data.error);
+        optionsRef.current.onError?.(new Error(data.error));
+      }
+
       if (data.closed) {
-        console.log("ASR session closed by server");
+        console.log("ASR session closed (poll)");
+        stopPolling();
         setIsConnected(false);
         setIsRecognizing(false);
-        if (pollIntervalRef.current) {
-          clearInterval(pollIntervalRef.current);
-          pollIntervalRef.current = null;
-        }
         optionsRef.current.onDisconnected?.();
       }
     } catch (error) {
-      console.error("Poll error:", error);
+      console.error("ASR poll fetch error:", error);
     }
   }, []);
 
-  // Send queued audio chunks
+  const startPolling = useCallback((interval = 200) => {
+    stopPolling();
+    console.log("ASR: falling back to polling");
+    pollIntervalRef.current = setInterval(pollResults, interval);
+  }, [pollResults]);
+
+  const stopPolling = useCallback(() => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+  }, []);
+
+  // Start SSE streaming for results, with polling fallback
+  const startSSE = useCallback((sessionId: string) => {
+    const abort = new AbortController();
+    sseAbortRef.current = abort;
+
+    const url = `${ASR_STREAM_URL}?sessionId=${encodeURIComponent(sessionId)}`;
+
+    fetch(url, { signal: abort.signal })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`SSE connection failed: ${response.status}`);
+        }
+
+        console.log("ASR SSE connected");
+
+        const reader = response.body?.getReader();
+        if (!reader) {
+          throw new Error("No response body for SSE");
+        }
+
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+
+          // Parse SSE events from buffer
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || ""; // Keep incomplete line in buffer
+
+          let currentEvent = "message";
+
+          for (const line of lines) {
+            if (line.startsWith("event: ")) {
+              currentEvent = line.slice(7).trim();
+            } else if (line.startsWith("data: ")) {
+              const dataStr = line.slice(6);
+
+              try {
+                const data = JSON.parse(dataStr);
+
+                if (currentEvent === "error") {
+                  console.error("ASR SSE error:", data.error);
+                  optionsRef.current.onError?.(new Error(data.error));
+                } else if (currentEvent === "closed") {
+                  console.log("ASR session closed via SSE");
+                  setIsConnected(false);
+                  setIsRecognizing(false);
+                  optionsRef.current.onDisconnected?.();
+                  return;
+                } else {
+                  // Default "message" event = ASR result
+                  if (data.text !== undefined) {
+                    console.log("ASR SSE result:", data);
+                    optionsRef.current.onResult?.(data.text, data.definite);
+                  }
+                }
+              } catch {
+                // Ignore malformed JSON
+              }
+
+              currentEvent = "message"; // Reset for next event
+            }
+          }
+        }
+
+        // Stream ended normally
+        console.log("ASR SSE stream ended");
+        setIsConnected(false);
+        setIsRecognizing(false);
+        optionsRef.current.onDisconnected?.();
+      })
+      .catch((err) => {
+        if (err.name === "AbortError") return; // Normal disconnect
+        console.warn("ASR SSE failed, falling back to polling:", err.message);
+        // Fallback to polling when SSE is unavailable
+        startPolling();
+      });
+  }, [startPolling]);
+
+  // Send queued audio chunks as binary
   const processAudioQueue = useCallback(async () => {
     if (sendingRef.current || audioQueueRef.current.length === 0) return;
     if (!sessionIdRef.current) return;
@@ -108,15 +203,14 @@ export function useDoubaoASR(options: UseDoubaoASROptions): UseDoubaoASRReturn {
       if (!audioData) break;
 
       try {
-        const audioBase64 = arrayBufferToBase64(audioData);
         await fetch(ASR_PROXY_URL, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "audio",
-            sessionId: sessionIdRef.current,
-            audioBase64,
-          }),
+          headers: {
+            "Content-Type": "application/octet-stream",
+            "X-Session-Id": sessionIdRef.current!,
+            "X-Is-Last": "false",
+          },
+          body: audioData,
         });
       } catch (error) {
         console.error("Send audio error:", error);
@@ -154,8 +248,8 @@ export function useDoubaoASR(options: UseDoubaoASROptions): UseDoubaoASRReturn {
         setIsRecognizing(true);
         optionsRef.current.onConnected?.();
 
-        // Start polling for results
-        pollIntervalRef.current = setInterval(pollResults, 200);
+        // Start SSE for real-time results (replaces polling)
+        startSSE(data.sessionId);
 
         console.log("ASR session created:", data.sessionId);
       } else {
@@ -168,7 +262,7 @@ export function useDoubaoASR(options: UseDoubaoASROptions): UseDoubaoASRReturn {
       );
       throw error;
     }
-  }, [pollResults]);
+  }, [startSSE]);
 
   const sendAudio = useCallback((audioData: ArrayBuffer) => {
     if (!sessionIdRef.current) {
@@ -189,11 +283,12 @@ export function useDoubaoASR(options: UseDoubaoASROptions): UseDoubaoASRReturn {
     try {
       await fetch(ASR_PROXY_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "end",
-          sessionId: sessionIdRef.current,
-        }),
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "X-Session-Id": sessionIdRef.current,
+          "X-Is-Last": "true",
+        },
+        body: new ArrayBuffer(0),
       });
 
       setIsRecognizing(false);
@@ -203,33 +298,37 @@ export function useDoubaoASR(options: UseDoubaoASROptions): UseDoubaoASRReturn {
   }, []);
 
   const disconnect = useCallback(async () => {
-    // Only log if there's a session to disconnect
-    if (sessionIdRef.current) {
+    // Capture and clear session ID immediately (before async operations)
+    const sessionId = sessionIdRef.current;
+    sessionIdRef.current = null;
+
+    if (sessionId) {
       console.log("Disconnecting ASR...");
     }
 
-    // Stop polling
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current);
-      pollIntervalRef.current = null;
+    // Abort SSE stream
+    if (sseAbortRef.current) {
+      sseAbortRef.current.abort();
+      sseAbortRef.current = null;
     }
 
+    // Stop polling fallback
+    stopPolling();
+
     // Close session on backend
-    if (sessionIdRef.current) {
+    if (sessionId) {
       try {
         await fetch(ASR_PROXY_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             action: "close",
-            sessionId: sessionIdRef.current,
+            sessionId,
           }),
         });
       } catch (error) {
         console.error("Close session error:", error);
       }
-
-      sessionIdRef.current = null;
     }
 
     // Clear audio queue
@@ -239,15 +338,17 @@ export function useDoubaoASR(options: UseDoubaoASROptions): UseDoubaoASRReturn {
     setIsConnected(false);
     setIsRecognizing(false);
     optionsRef.current.onDisconnected?.();
-  }, []);
+  }, [stopPolling]);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
+      if (sseAbortRef.current) {
+        sseAbortRef.current.abort();
+      }
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
       }
-      // Note: Cannot call async disconnect here, but sessions auto-cleanup on backend
     };
   }, []);
 
@@ -261,5 +362,5 @@ export function useDoubaoASR(options: UseDoubaoASROptions): UseDoubaoASRReturn {
   };
 }
 
-// Legacy export for compatibility - remove ASRConfig from interface
+// Legacy export for compatibility
 export type { UseDoubaoASROptions, UseDoubaoASRReturn };

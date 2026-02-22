@@ -2,6 +2,55 @@
 // V2 学习分析系统 - 类型定义
 // ============================================================
 
+// ============================================================
+// 统一错误处理 - Result 类型
+// ============================================================
+
+/**
+ * Result 类型 - 强制调用者处理成功/失败两种情况
+ */
+export type Result<T, F = T> =
+  | { ok: true; data: T }
+  | { ok: false; error: string; code: AgentErrorCode; fallback?: F };
+
+/**
+ * Agent 错误码
+ */
+export type AgentErrorCode =
+  | 'TIMEOUT'          // API 调用超时
+  | 'API_FAILED'       // API 调用失败
+  | 'DB_ERROR'         // 数据库错误
+  | 'DB_UNAVAILABLE'   // 数据库不可用
+  | 'INVALID_INPUT'    // 输入参数无效
+  | 'PARSE_ERROR'      // 解析响应失败
+  | 'UNKNOWN';         // 未知错误
+
+/**
+ * 创建成功结果
+ */
+export function ok<T>(data: T): Result<T> {
+  return { ok: true, data };
+}
+
+/**
+ * 创建失败结果
+ */
+export function err<T, F = T>(
+  error: string,
+  code: AgentErrorCode = 'UNKNOWN',
+  fallback?: F
+): Result<T, F> {
+  return { ok: false, error, code, fallback };
+}
+
+/**
+ * 解包 Result，失败时使用 fallback
+ */
+export function unwrapOr<T>(result: Result<T>, defaultValue: T): T {
+  return result.ok ? result.data : (result.fallback ?? defaultValue);
+}
+
+// ============================================================
 // 学生画像
 export interface StudentProfile {
   student_id: string;

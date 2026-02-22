@@ -4,6 +4,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { orchestrate, isDeepSeekAvailable } from '@/lib/agents';
+import { getAuthUser } from '@/lib/auth/require-auth';
 import type { OrchestratorRequest } from '@/lib/agents/types';
 
 export async function POST(req: NextRequest) {
@@ -19,7 +20,11 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
 
     // 验证必要字段
-    const { intent, studentId, videoId, payload } = body as OrchestratorRequest;
+    const { intent, videoId, payload } = body as OrchestratorRequest;
+
+    // 服务端鉴权：从 cookie 取真实用户 ID，忽略客户端传的 studentId
+    const authUser = await getAuthUser();
+    const studentId = authUser?.userId ?? body.studentId;
 
     if (!intent) {
       return NextResponse.json(

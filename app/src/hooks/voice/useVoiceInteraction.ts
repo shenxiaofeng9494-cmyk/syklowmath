@@ -61,6 +61,8 @@ export function useVoiceInteraction(options: UseVoiceInteractionOptions): UseVoi
   const isConnectingRef = useRef(false);
   // Track listening state in ref for use in callbacks
   const isListeningRef = useRef(false);
+  // Track whether LLM has completed (for onAllDone detection)
+  const llmCompleteRef = useRef(false);
   // Track ASR connection state in ref for use in callbacks
   const asrConnectedRef = useRef(false);
 
@@ -99,6 +101,12 @@ export function useVoiceInteraction(options: UseVoiceInteractionOptions): UseVoi
       if (isListening) {
         setState("ready");
       }
+      // If LLM is complete and playback just ended, all audio has been played
+      if (llmCompleteRef.current) {
+        console.log("[useVoiceInteraction] LLM complete + playback ended → onAllDone");
+        llmCompleteRef.current = false;
+        optionsRef.current.onAllDone?.();
+      }
     },
   });
 
@@ -108,11 +116,21 @@ export function useVoiceInteraction(options: UseVoiceInteractionOptions): UseVoi
       console.log("ASR result:", { text, isFinal });
 
       if (isFinal && text) {
+        // Guard: ignore duplicate final results after we've already sent to LLM
+        if (!isListeningRef.current) {
+          console.log("[VoiceInteraction] ASR final result ignored (already stopped listening)");
+          return;
+        }
+
         console.log("[VoiceInteraction] ASR final result, sending to LLM:", text);
         currentTranscriptRef.current = text;
         optionsRef.current.onTranscript?.(text, true);
 
+        // Stop listening immediately to prevent duplicate LLM calls
+        isListeningRef.current = false;
+
         // Send to LLM
+        llmCompleteRef.current = false; // Reset for new conversation turn
         setState("thinking");
         llm.send(text);
       } else {
@@ -296,7 +314,7 @@ export function useVoiceInteraction(options: UseVoiceInteractionOptions): UseVoi
 
       // Queue text for TTS
       // Split by sentence to reduce latency
-      if (text.includes("。") || text.includes("？") || text.includes("！")) {
+      if (/[。？！，；,;]/.test(text)) {
         console.log("[useVoiceInteraction] Queueing TTS for sentence, length:", currentAnswerRef.current.length);
         tts.queueText(currentAnswerRef.current);
         currentAnswerRef.current = "";
@@ -313,6 +331,8 @@ export function useVoiceInteraction(options: UseVoiceInteractionOptions): UseVoi
         tts.queueText(currentAnswerRef.current);
         currentAnswerRef.current = "";
       }
+      // Mark LLM as done — onAllDone will fire when playback also finishes
+      llmCompleteRef.current = true;
       console.log("[useVoiceInteraction] Calling optionsRef.current.onComplete");
       optionsRef.current.onComplete?.();
     },
@@ -369,6 +389,9 @@ export function useVoiceInteraction(options: UseVoiceInteractionOptions): UseVoi
           videoContext: optionsRef.current.videoContext,
           videoId: optionsRef.current.videoId,
           currentTime: optionsRef.current.currentTime,
+          studentId: optionsRef.current.studentId, // V2 自适应：传递学生ID获取画像
+          learningSessionId: optionsRef.current.learningSessionId, // 跨模式上下文共享
+          interventionConfig: optionsRef.current.interventionConfig, // 介入模式配置（含动态问题）
         }),
       });
 
@@ -394,8 +417,6 @@ export function useVoiceInteraction(options: UseVoiceInteractionOptions): UseVoi
       guidesCache = config.guides;
       nodeListCache = config.nodeList;
 
-      console.log("Session config received, connecting ASR and TTS...");
-
       // Check again if this attempt is still valid
       if (thisAttempt !== connectionAttemptRef.current) {
         console.log("Connection attempt superseded after session config");
@@ -403,16 +424,20 @@ export function useVoiceInteraction(options: UseVoiceInteractionOptions): UseVoi
         return;
       }
 
-      // Connect ASR and TTS in parallel (both use backend proxy - no config needed)
-      await Promise.all([
-        asr.connect(),
-        tts.connect(),
-      ]);
+      // In intervention mode, skip eager TTS connect — it would idle for 30+ seconds
+      // while interventionTTS plays the question and student answers. The internal TTS
+      // auto-reconnects on demand when LLM responds (via processQueue in useDoubaoTTS).
+      // In normal mode, connect TTS eagerly for fast first response.
+      if (optionsRef.current.interventionConfig) {
+        console.log("Session config received (intervention mode), skipping eager TTS connect");
+      } else {
+        console.log("Session config received, connecting TTS (ASR deferred to startListening)...");
+        await tts.connect();
+      }
 
       // Final check before setting connected state
       if (thisAttempt !== connectionAttemptRef.current) {
-        console.log("Connection attempt superseded after WebSocket connect");
-        asr.disconnect();
+        console.log("Connection attempt superseded after TTS connect");
         tts.disconnect();
         isConnectingRef.current = false;
         return;
@@ -467,6 +492,12 @@ export function useVoiceInteraction(options: UseVoiceInteractionOptions): UseVoi
     }
 
     try {
+      // Connect ASR just-in-time (deferred from connect() to avoid timeout)
+      if (!asr.isConnected) {
+        console.log("Connecting ASR just-in-time before listening...");
+        await asr.connect();
+      }
+
       // Set ref BEFORE starting capture so audio chunks are sent immediately
       isListeningRef.current = true;
       await capture.start();
@@ -478,7 +509,7 @@ export function useVoiceInteraction(options: UseVoiceInteractionOptions): UseVoi
       console.error("Failed to start listening:", error);
       throw error;
     }
-  }, [isConnected, capture]);
+  }, [isConnected, capture, asr]);
 
   // Stop listening
   const stopListening = useCallback(() => {
@@ -516,6 +547,19 @@ export function useVoiceInteraction(options: UseVoiceInteractionOptions): UseVoi
     setState("thinking");
     llm.send(text);
   }, [isConnected, llm]);
+
+  // Update session config without reconnecting (for intervention mode optimization)
+  // This allows changing the LLM systemPrompt/tools in-place, triggering
+  // the useDeepSeekLLM hook to reinitialize history with the new prompt.
+  const updateSessionConfig = useCallback((updates: Partial<Pick<VoiceSessionResponse, 'systemPrompt' | 'tools'>>) => {
+    console.log("[useVoiceInteraction] Updating session config in-place (no reconnect)");
+    setSessionConfig(prev => {
+      if (!prev) return prev;
+      const updated = { ...prev, ...updates };
+      sessionConfigRef.current = updated;
+      return updated;
+    });
+  }, []);
 
   // Interrupt
   const interrupt = useCallback(() => {
@@ -571,5 +615,8 @@ export function useVoiceInteraction(options: UseVoiceInteractionOptions): UseVoi
 
     // Interrupt
     interrupt,
+
+    // Session config update (no reconnect)
+    updateSessionConfig,
   };
 }

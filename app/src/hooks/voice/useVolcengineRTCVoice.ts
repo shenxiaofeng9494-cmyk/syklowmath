@@ -468,5 +468,6 @@ export function useVolcengineRTCVoice(
     stopPushToTalk,
     setIsPushToTalk,
     interrupt,
+    updateSessionConfig: () => {}, // No-op: RTC voice doesn't use local session config
   };
 }

@@ -196,6 +196,8 @@ export interface UseVoiceInteractionOptions {
   videoId?: string;
   currentTime?: number;
   subtitles?: SubtitleCue[];
+  studentId?: string;  // V2 自适应：学生ID，用于获取画像
+  learningSessionId?: string;  // 跨模式上下文共享：学习会话ID
   interventionConfig?: any;  // 介入模式配置（包含 checkpoint 信息）
   onSpeechStart?: () => void;
   onSpeechEnd?: () => void;
@@ -204,6 +206,8 @@ export interface UseVoiceInteractionOptions {
   onAnswerComplete?: (text: string) => void;
   onToolCall?: (tool: string, params: Record<string, unknown>, callId?: string) => void;
   onComplete?: () => void;
+  /** Fires when LLM is complete AND all TTS audio has been played back */
+  onAllDone?: () => void;
   onResumeVideo?: () => void;
   onJumpToTime?: (time: number) => void;
 }
@@ -229,6 +233,9 @@ export interface UseVoiceInteractionReturn {
 
   // Interrupt
   interrupt: () => void;
+
+  // Update session config without reconnecting (for intervention mode optimization)
+  updateSessionConfig: (updates: Partial<Pick<VoiceSessionResponse, 'systemPrompt' | 'tools'>>) => void;
 }
 
 // ============================================================================

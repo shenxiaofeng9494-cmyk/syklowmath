@@ -2,6 +2,7 @@ import Link from "next/link";
 import { videos as fallbackVideos } from "@/data/videos";
 import { supabase } from "@/lib/supabase";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { UserMenu } from "@/components/auth/UserMenu";
 import type { Video as DBVideo } from "@/types/database";
 
 // 视频数据格式（兼容旧格式）
@@ -80,9 +81,12 @@ export default async function Home() {
     <div className="min-h-screen bg-background">
       {/* Header */}
       <header className="border-b border-border bg-card/80 backdrop-blur-sm sticky top-0 z-10">
-        <div className="max-w-6xl mx-auto px-4 py-4">
-          <h1 className="text-2xl font-bold text-blue-400">MathTalkTV</h1>
-          <p className="text-sm text-muted-foreground">对话式数学视频学习平台</p>
+        <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-blue-400">MathTalkTV</h1>
+            <p className="text-sm text-muted-foreground">对话式数学视频学习平台</p>
+          </div>
+          <UserMenu />
         </div>
       </header>
 

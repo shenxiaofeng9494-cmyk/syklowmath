@@ -14,6 +14,9 @@ export const ASR_WEBSOCKET_URL_DIRECT = "wss://openspeech.bytedance.com/api/v3/s
 // Backend proxy endpoint (recommended - handles auth headers server-side)
 export const ASR_PROXY_URL = "/api/voice/asr";
 
+// SSE streaming endpoint for real-time ASR results (replaces polling)
+export const ASR_STREAM_URL = "/api/voice/asr/stream";
+
 export const ASR_DEFAULTS = {
   SAMPLE_RATE: 16000,
   BITS_PER_SAMPLE: 16,
@@ -28,7 +31,7 @@ export const ASR_DEFAULTS = {
 
 // Audio chunk configuration
 export const ASR_AUDIO_CHUNK = {
-  DURATION_MS: 200,           // 200ms per chunk (optimal for Doubao ASR)
+  DURATION_MS: 100,           // 100ms per chunk (faster first-recognition latency)
   get SAMPLES_PER_CHUNK() {
     return Math.floor((ASR_DEFAULTS.SAMPLE_RATE * this.DURATION_MS) / 1000);
   },
@@ -46,6 +49,9 @@ export const TTS_WEBSOCKET_URL_DIRECT = "wss://openspeech.bytedance.com/api/v3/t
 
 // Backend proxy endpoint (recommended - handles auth headers server-side)
 export const TTS_PROXY_URL = "/api/voice/tts";
+
+// SSE streaming endpoint for real-time TTS audio (replaces polling)
+export const TTS_STREAM_URL = "/api/voice/tts/stream";
 
 export const TTS_DEFAULTS = {
   SAMPLE_RATE: 24000,
@@ -83,7 +89,7 @@ export const LLM_API_URL = process.env.DOUBAO_API_BASE || "https://ark.cn-beijin
 
 export const LLM_DEFAULTS = {
   MODEL: process.env.DOUBAO_MODEL_ENDPOINT || "ep-20250119143058-lzl6k",  // Doubao LLM endpoint
-  MAX_TOKENS: 2048,
+  MAX_TOKENS: 150,
   TEMPERATURE: 0.7,
   TOP_P: 0.9,
   STREAM: true,

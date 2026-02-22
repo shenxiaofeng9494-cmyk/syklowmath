@@ -23,16 +23,6 @@ export interface SubtitleCue {
 // 请将你的视频文件命名为 demo.mp4 并放到 public/videos/ 目录
 export const videos: Video[] = [
   {
-    id: "demo",
-    title: "一元二次方程的定义",
-    description: "了解一元二次方程的定义，学会判断一个方程是否为一元二次方程，掌握整式方程、化简、二次项系数等关键概念",
-    videoUrl: "/videos/demo.mp4",
-    duration: 307, // 约5分钟
-    teacher: "数学老师",
-    // 字幕现在通过 Whisper API 自动生成，这里保留空数组作为后备
-    subtitles: [],
-  },
-  {
     id: "linear-function",
     title: "一次函数",
     description: "了解一次函数的定义 y=kx+b，理解正比例函数是特殊的一次函数，掌握一次函数的图像和性质",

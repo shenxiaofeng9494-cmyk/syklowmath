@@ -12,12 +12,11 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { EventEmitter } from "events";
+import { sessions } from "./sessions";
+import type { TTSSession } from "./sessions";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const WebSocket = require("ws");
-
-// Type for WebSocket instance
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type WebSocketInstance = any;
 
 // Doubao TTS WebSocket URL
 const TTS_WEBSOCKET_URL = "wss://openspeech.bytedance.com/api/v3/tts/bidirection";
@@ -58,18 +57,6 @@ const PROTOCOL = {
   SERIAL_JSON: 0b0001,
   COMPRESS_NONE: 0b0000,
 };
-
-// Store active sessions
-const sessions = new Map<string, {
-  ws: WebSocketInstance;
-  connectionId: string;
-  sessionId: string | null;
-  audioChunks: Buffer[];
-  isConnectionStarted: boolean;
-  isSessionStarted: boolean;
-  error: string | null;
-  closed: boolean;
-}>();
 
 function generateUUID(): string {
   return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
@@ -286,15 +273,16 @@ async function createSession(): Promise<NextResponse> {
       },
     });
 
-    const session = {
+    const session: TTSSession = {
       ws,
       connectionId: connectId,
-      sessionId: null as string | null,
-      audioChunks: [] as Buffer[],
+      sessionId: null,
+      audioChunks: [],
       isConnectionStarted: false,
       isSessionStarted: false,
-      error: null as string | null,
+      error: null,
       closed: false,
+      emitter: new EventEmitter(),
     };
 
     const timeout = setTimeout(() => {
@@ -318,6 +306,7 @@ async function createSession(): Promise<NextResponse> {
         if (parsed.isError) {
           console.error("TTS error:", parsed.payload);
           session.error = JSON.stringify(parsed.payload);
+          session.emitter.emit("error", JSON.stringify(parsed.payload));
           return;
         }
 
@@ -349,31 +338,36 @@ async function createSession(): Promise<NextResponse> {
           case TTS_EVENT.SESSION_STARTED:
             console.log("TTS session started");
             session.isSessionStarted = true;
+            session.emitter.emit("sessionStarted");
             break;
 
           case TTS_EVENT.SESSION_FINISHED:
             console.log("TTS session finished");
             session.isSessionStarted = false;
             session.sessionId = null;
+            session.emitter.emit("sessionFinished");
             break;
 
           case TTS_EVENT.SESSION_CANCELLED:
             console.log("TTS session cancelled");
             session.isSessionStarted = false;
             session.sessionId = null;
+            session.emitter.emit("sessionFinished");
             break;
 
           case TTS_EVENT.SESSION_FAILED:
             console.error("TTS session failed:", parsed.payload);
             session.error = JSON.stringify(parsed.payload);
             session.isSessionStarted = false;
+            session.emitter.emit("error", JSON.stringify(parsed.payload));
             break;
 
           case TTS_EVENT.TTS_RESPONSE:
-            // Audio data
+            // Audio data — push to buffer AND emit for SSE listeners
             if (parsed.audioData) {
               console.log(`TTS audio chunk received: ${parsed.audioData.length} bytes`);
               session.audioChunks.push(parsed.audioData);
+              session.emitter.emit("audio", parsed.audioData);
             } else {
               console.log("TTS_RESPONSE but no audioData, payload:", parsed.payload);
             }
@@ -397,14 +391,17 @@ async function createSession(): Promise<NextResponse> {
       console.error(`TTS session ${clientSessionId} error:`, error);
       session.error = error.message;
       session.closed = true;
+      session.emitter.emit("error", error.message);
     });
 
     ws.on("close", (code: number, reason: Buffer) => {
       console.log(`TTS session ${clientSessionId} closed:`, code, reason.toString());
       session.closed = true;
+      session.emitter.emit("closed");
 
       // Clean up after 30 seconds
       setTimeout(() => {
+        session.emitter.removeAllListeners();
         sessions.delete(clientSessionId);
       }, 30000);
     });
@@ -468,10 +465,7 @@ async function speakText(clientSessionId: string, text: string): Promise<NextRes
   );
   session.ws.send(startSessionFrame);
 
-  // Wait a bit for session to start, then send text
-  await new Promise((resolve) => setTimeout(resolve, 100));
-
-  // Send TaskRequest with text
+  // Send TaskRequest with text (no delay - StartSession/TaskRequest/FinishSession sent back-to-back)
   const taskPayload = {
     event: TTS_EVENT.TASK_REQUEST,
     req_params: {

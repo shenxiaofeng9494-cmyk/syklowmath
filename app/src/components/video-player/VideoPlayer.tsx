@@ -436,8 +436,8 @@ export const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
         </div>
         )}
 
-        {/* Join Meeting 按钮 - 游戏化样式 */}
-        {!isInConversation && !isPlaying && onJoinMeeting && (
+        {/* Join Meeting 按钮 - 仅在视频初始状态显示（未播放过），暂停时不显示 */}
+        {!isInConversation && !isPlaying && onJoinMeeting && currentTime < 1 && (
           <div className="absolute inset-0 flex items-center justify-center z-10">
             <button
               onClick={onJoinMeeting}

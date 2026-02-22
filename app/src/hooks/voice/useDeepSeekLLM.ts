@@ -55,19 +55,34 @@ export function useDoubaoLLM(options: UseDoubaoLLMOptions): UseDoubaoLLMReturn {
   const abortControllerRef = useRef<AbortController | null>(null);
   const optionsRef = useRef(options);
   const pendingToolCallsRef = useRef<Map<string, { name: string; arguments: string }>>(new Map());
+  // Use ref for isProcessing to avoid stale closure in sendWithHistory
+  const isProcessingRef = useRef(false);
+  // Use ref for history to avoid calling sendWithHistory inside state updaters
+  const historyRef = useRef<ChatMessage[]>([]);
 
-  // Keep options ref up to date
+  // Keep refs in sync
   useEffect(() => {
     optionsRef.current = options;
   }, [options]);
 
-  // Initialize history with system message
+  useEffect(() => {
+    historyRef.current = history;
+  }, [history]);
+
+  // Initialize / re-initialize history when system prompt changes
+  const prevSystemPromptRef = useRef("");
   useEffect(() => {
     const { config } = optionsRef.current;
-    if (config.systemPrompt) {
-      setHistory([{ role: "system", content: config.systemPrompt }]);
+    const sp = config.systemPrompt || "";
+    if (sp && sp !== prevSystemPromptRef.current) {
+      console.log("[DoubaoLLM] System prompt updated, reinitializing history. Length:", sp.length);
+      prevSystemPromptRef.current = sp;
+      const initial = [{ role: "system" as const, content: sp }];
+      historyRef.current = initial;
+      setHistory(initial);
+      pendingToolCallsRef.current.clear();
     }
-  }, []);
+  }, [options.config.systemPrompt]);
 
   const processStream = async (response: Response) => {
     const reader = response.body?.getReader();
@@ -197,7 +212,9 @@ export function useDoubaoLLM(options: UseDoubaoLLMOptions): UseDoubaoLLMReturn {
           assistantMessage.tool_calls = currentToolCalls.filter(Boolean);
         }
 
-        setHistory((prev) => [...prev, assistantMessage]);
+        const newHistory = [...historyRef.current, assistantMessage];
+        historyRef.current = newHistory;
+        setHistory(newHistory);
       }
 
       optionsRef.current.onComplete?.();
@@ -207,11 +224,13 @@ export function useDoubaoLLM(options: UseDoubaoLLMOptions): UseDoubaoLLMReturn {
   };
 
   const sendWithHistory = useCallback(async (messages: ChatMessage[]) => {
-    if (isProcessing) {
+    // Use ref to check processing state (avoids stale closure issues)
+    if (isProcessingRef.current) {
       console.warn("LLM already processing");
       return;
     }
 
+    isProcessingRef.current = true;
     setIsProcessing(true);
     abortControllerRef.current = new AbortController();
 
@@ -251,24 +270,24 @@ export function useDoubaoLLM(options: UseDoubaoLLMOptions): UseDoubaoLLMReturn {
         );
       }
     } finally {
+      isProcessingRef.current = false;
       setIsProcessing(false);
       abortControllerRef.current = null;
     }
-  }, [isProcessing]);
+  }, []);
 
   const send = useCallback(async (userMessage: string) => {
-    // Add user message to history
     const newMessage: ChatMessage = {
       role: "user",
       content: userMessage,
     };
 
-    setHistory((prev) => {
-      const newHistory = [...prev, newMessage];
-      // Call sendWithHistory with the new history
-      sendWithHistory(newHistory);
-      return newHistory;
-    });
+    // Build new history from ref (avoid calling sendWithHistory inside state updater
+    // which React Strict Mode double-invokes, causing duplicate LLM calls)
+    const newHistory = [...historyRef.current, newMessage];
+    historyRef.current = newHistory;
+    setHistory(newHistory);
+    sendWithHistory(newHistory);
   }, [sendWithHistory]);
 
   const abort = useCallback(() => {
@@ -276,6 +295,7 @@ export function useDoubaoLLM(options: UseDoubaoLLMOptions): UseDoubaoLLMReturn {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
+    isProcessingRef.current = false;
     setIsProcessing(false);
   }, []);
 
@@ -286,7 +306,6 @@ export function useDoubaoLLM(options: UseDoubaoLLMOptions): UseDoubaoLLMReturn {
       return;
     }
 
-    // Add tool result to history
     const toolMessage: ChatMessage = {
       role: "tool",
       content: result,
@@ -294,26 +313,25 @@ export function useDoubaoLLM(options: UseDoubaoLLMOptions): UseDoubaoLLMReturn {
       name: toolCall.name,
     };
 
-    setHistory((prev) => {
-      const newHistory = [...prev, toolMessage];
+    // Build new history from ref (avoid side effects inside state updater)
+    const newHistory = [...historyRef.current, toolMessage];
+    historyRef.current = newHistory;
+    setHistory(newHistory);
 
-      // Check if all pending tool calls have results
-      const pendingCount = pendingToolCallsRef.current.size;
-      pendingToolCallsRef.current.delete(callId);
+    // Check if all pending tool calls have results
+    const pendingCount = pendingToolCallsRef.current.size;
+    pendingToolCallsRef.current.delete(callId);
 
-      // If all tool results received, continue conversation
-      if (pendingToolCallsRef.current.size === 0 && pendingCount > 0) {
-        // Automatically send to continue the conversation
-        sendWithHistory(newHistory);
-      }
-
-      return newHistory;
-    });
+    if (pendingToolCallsRef.current.size === 0 && pendingCount > 0) {
+      sendWithHistory(newHistory);
+    }
   }, [sendWithHistory]);
 
   const clearHistory = useCallback(() => {
     const { config } = optionsRef.current;
-    setHistory(config.systemPrompt ? [{ role: "system", content: config.systemPrompt }] : []);
+    const initial: ChatMessage[] = config.systemPrompt ? [{ role: "system", content: config.systemPrompt }] : [];
+    historyRef.current = initial;
+    setHistory(initial);
     pendingToolCallsRef.current.clear();
   }, []);
 

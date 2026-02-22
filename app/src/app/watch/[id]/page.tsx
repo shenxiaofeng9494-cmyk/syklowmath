@@ -1,15 +1,18 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { VideoPlayer, VideoPlayerHandle } from "@/components/video-player/VideoPlayer";
 import { ChatPanel } from "@/components/chat-panel/ChatPanel";
 import { GamePrompt } from "@/components/game-player/GamePrompt";
 import { DrawingOverlay, TldrawCanvasHandle, DrawingShape } from "@/components/drawing-canvas";
+import { LearningReportModal } from "@/components/learning-report/LearningReportModal";
 import { getVideoById, SubtitleCue } from "@/data/videos";
 import { VoiceMode, VoiceBackend } from "@/types/drawing-script";
 import { useAdaptiveQuestions } from "@/hooks/useAdaptiveQuestions";
+import { useAuth } from "@/components/auth/AuthProvider";
+import type { LearningAnalysis } from "@/lib/agents/types";
 
 interface ClientVideo {
   id: string;
@@ -46,19 +49,9 @@ interface TranscribeResponse {
   subtitles: SubtitleCue[];
 }
 
-// 生成或获取学生ID（使用 localStorage 持久化）
-function getStudentId(): string {
-  if (typeof window === 'undefined') return 'anonymous';
-  let studentId = localStorage.getItem('mathtalk_student_id');
-  if (!studentId) {
-    studentId = `student-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    localStorage.setItem('mathtalk_student_id', studentId);
-  }
-  return studentId;
-}
-
 export default function WatchPage() {
   const params = useParams();
+  const router = useRouter();
   const videoId = params.id as string;
 
   // 视频数据状态
@@ -66,8 +59,15 @@ export default function WatchPage() {
   const [videoLoading, setVideoLoading] = useState(true);
   const [videoError, setVideoError] = useState<string>("");
 
+  // 学习报告弹窗状态
+  const [showLearningReport, setShowLearningReport] = useState(false);
+  const [analysisData, setAnalysisData] = useState<LearningAnalysis | null>(null);
+  // 是否关闭报告后导航回首页
+  const pendingNavigateRef = useRef(false);
+
   // V2 自适应提问系统
-  const [studentId] = useState(() => getStudentId());
+  const { user } = useAuth();
+  const studentId = user?.id ?? 'anonymous';
   const {
     introQuestions,
     currentQuestion,
@@ -77,6 +77,10 @@ export default function WatchPage() {
     submitLearningData,
     logMessage,
     logCheckpointResponse,
+    hasUnsavedData,
+    getBeaconPayload,
+    pregenerateCheckpointQuestions,
+    getPregeneratedQuestion,
   } = useAdaptiveQuestions({
     studentId,
     videoId,
@@ -147,6 +151,7 @@ export default function WatchPage() {
 
   // 对话状态
   const [isInConversation, setIsInConversation] = useState(false);
+  const [hasEverJoined, setHasEverJoined] = useState(false);  // 是否曾经加入过对话（用于控制聊天面板显示）
   const [autoStartMic, setAutoStartMic] = useState(false);  // 是否自动开启麦克风
   const [videoContext, setVideoContext] = useState<VideoContext>({
     currentTime: 0,
@@ -175,7 +180,7 @@ export default function WatchPage() {
 
   // 全屏状态
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [showChatInFullscreen, setShowChatInFullscreen] = useState(false);
+  const [showChatInFullscreen, setShowChatInFullscreen] = useState(true);
   const fullscreenContainerRef = useRef<HTMLDivElement>(null);
 
   // 语音状态（用于控制栏显示）
@@ -205,7 +210,6 @@ export default function WatchPage() {
   // 语音后端状态
   const [voiceBackend, setVoiceBackend] = useState<VoiceBackend>("doubao_realtime");
   // 语音后端选择弹窗状态
-  const [showBackendSelector, setShowBackendSelector] = useState(false);
 
   // 加载字幕
   useEffect(() => {
@@ -267,6 +271,50 @@ export default function WatchPage() {
 
     loadNodes();
   }, [videoId]);
+
+  // 检查点数据（含 summary, key_concepts，用于预生成动态问题）
+  const checkpointsRef = useRef<any[]>([]);
+  useEffect(() => {
+    if (!videoId) return;
+    const loadCheckpoints = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/video/${videoId}/checkpoint`);
+        if (res.ok) {
+          const json = await res.json();
+          if (json.success && json.data) {
+            checkpointsRef.current = json.data;
+            console.log(`[V2] Loaded ${json.data.length} checkpoints for pre-generation`);
+          }
+        }
+      } catch (error) {
+        console.error('[V2] Failed to load checkpoints:', error);
+      }
+    };
+    loadCheckpoints();
+  }, [videoId]);
+
+  // 首次加入对话时，预生成所有检查点的动态问题
+  const hasPregeneratedRef = useRef(false);
+  useEffect(() => {
+    if (isInConversation && !hasPregeneratedRef.current && checkpointsRef.current.length > 0) {
+      hasPregeneratedRef.current = true;
+      pregenerateCheckpointQuestions(
+        checkpointsRef.current.map((cp: any) => ({
+          id: cp.id,
+          title: cp.title,
+          summary: cp.summary,
+          keyConcepts: cp.key_concepts,
+        }))
+      );
+    }
+  }, [isInConversation, pregenerateCheckpointQuestions]);
+
+  // 首次加入时标记，使聊天面板可见（之后不再隐藏，保留对话记录）
+  useEffect(() => {
+    if (isInConversation) {
+      setHasEverJoined(true);
+    }
+  }, [isInConversation]);
 
   // 切换对话状态
   const toggleConversation = useCallback(() => {
@@ -349,26 +397,50 @@ export default function WatchPage() {
       setIsInConversation(false);
     }
 
-    // 设置介入配置
-    setInterventionConfig({
-      checkpoint: checkpoint,
-      isIntervention: true
-    });
-
     // 切换到精准模式（doubao backend）
     console.log('[WatchPage] 介入模式：切换到精准模式（doubao backend）');
     setVoiceBackend("doubao");
 
-    // 获取自适应检查点问题（V2 系统）
-    fetchCheckpointQuestion({
-      title: checkpoint.title,
-      summary: checkpoint.summary,
-      keyConcepts: checkpoint.keyConcepts,
-    }).then((question) => {
-      if (question) {
-        console.log('[V2] 检查点问题已生成:', question.content);
-      }
-    });
+    // 先查预生成缓存
+    const cachedQuestion = getPregeneratedQuestion(checkpoint.id);
+    if (cachedQuestion) {
+      // 缓存命中：直接设置动态问题，0ms 延迟
+      console.log('[V2] 预生成缓存命中:', cachedQuestion.content.substring(0, 50));
+      setInterventionConfig({
+        checkpoint: checkpoint,
+        isIntervention: true,
+        dynamicQuestion: cachedQuestion,
+      });
+    } else {
+      // 缓存未命中：先设置 null，异步 fetch
+      console.log('[V2] 预生成缓存未命中，使用 fallback 并异步 fetch');
+      setInterventionConfig({
+        checkpoint: checkpoint,
+        isIntervention: true,
+        dynamicQuestion: null,
+      });
+
+      // 获取自适应检查点问题（V2 系统 - 根据学生画像动态生成）
+      fetchCheckpointQuestion({
+        title: checkpoint.title,
+        summary: checkpoint.summary,
+        keyConcepts: checkpoint.key_concepts,
+      }).then((question) => {
+        if (question) {
+          console.log('[V2] 检查点动态问题已生成:', question.content);
+          setInterventionConfig((prev: any) => prev ? {
+            ...prev,
+            dynamicQuestion: question,
+          } : prev);
+        } else {
+          console.warn('[V2] 动态问题生成失败，使用 hardcoded fallback');
+          setInterventionConfig((prev: any) => prev ? {
+            ...prev,
+            dynamicQuestion: 'fallback',
+          } : prev);
+        }
+      });
+    }
 
     // 设置自动启动麦克风
     setAutoStartMic(true);
@@ -378,16 +450,15 @@ export default function WatchPage() {
       console.log('[WatchPage] 开启介入对话');
       setIsInConversation(true);
     }, 100);
-  }, [isInConversation, fetchCheckpointQuestion]);
+  }, [isInConversation, fetchCheckpointQuestion, getPregeneratedQuestion]);
 
-  // 结束必停点介入（不切换模式，等学生点继续）
+  // 结束必停点介入 — 清除全部介入状态，切回实时模式（由 VoiceInteraction 自动连接）
   const handleEndIntervention = useCallback(() => {
-    console.log('[WatchPage] 结束必停点介入（保持精准模式，等学生点继续）');
-    // 只清理介入状态标记，不清除 interventionConfig，不切换 voiceBackend
-    // 等学生点击"继续"时再切换
+    console.log('[WatchPage] 结束必停点介入，切换到实时模式');
     setIsCheckpointIntervening(false);
     setCurrentCheckpoint(null);
-    // 注意：不清除 interventionConfig，不切换 voiceBackend
+    setInterventionConfig(null);
+    setVoiceBackend("doubao_realtime");
   }, []);
 
   // 处理用户手动播放时退出介入模式并播放视频
@@ -417,15 +488,17 @@ export default function WatchPage() {
     }
   }, []);
 
-  // 监听全屏变化
+  // Refs for event handlers that need access to latest callback/state
+  const isInConversationRef = useRef(isInConversation);
+  isInConversationRef.current = isInConversation;
+  const interventionConfigRef = useRef(interventionConfig);
+  interventionConfigRef.current = interventionConfig;
+  const handleEndCallRef = useRef<(() => Promise<void>) | null>(null);
+
+  // 监听全屏变化 — 仅更新全屏状态，不自动结束通话
   useEffect(() => {
     const handleFullscreenChange = () => {
       setIsFullscreen(!!document.fullscreenElement);
-      // 退出全屏时隐藏聊天框并结束对话
-      if (!document.fullscreenElement) {
-        setShowChatInFullscreen(false);
-        setIsInConversation(false);
-      }
     };
 
     document.addEventListener("fullscreenchange", handleFullscreenChange);
@@ -434,20 +507,46 @@ export default function WatchPage() {
     };
   }, []);
 
+  // beforeunload 提示 — 对话进行中时提醒用户
+  useEffect(() => {
+    if (!isInConversation) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [isInConversation]);
+
+  // pagehide sendBeacon 兜底
+  const hasUnsavedDataRef = useRef(hasUnsavedData);
+  hasUnsavedDataRef.current = hasUnsavedData;
+  const getBeaconPayloadRef = useRef(getBeaconPayload);
+  getBeaconPayloadRef.current = getBeaconPayload;
+
+  useEffect(() => {
+    const handler = () => {
+      if (hasUnsavedDataRef.current()) {
+        try {
+          const payload = getBeaconPayloadRef.current();
+          const blob = new Blob([JSON.stringify(payload)], {
+            type: "application/json",
+          });
+          navigator.sendBeacon("/api/agent/main", blob);
+        } catch { /* best-effort */ }
+      }
+    };
+    window.addEventListener("pagehide", handler);
+    return () => window.removeEventListener("pagehide", handler);
+  }, []);
+
   // 全屏模式下切换聊天框
   const toggleChatInFullscreen = useCallback(() => {
     setShowChatInFullscreen((prev) => !prev);
   }, []);
 
-  // 点击 Join Meeting 按钮时显示选择弹窗
-  const handleJoinMeetingClick = useCallback(() => {
-    setShowBackendSelector(true);
-  }, []);
-
-  // 选择语音后端后真正加入对话
+  // 加入对话（指定语音后端）
   const handleSelectBackendAndJoin = useCallback(async (backend: VoiceBackend) => {
     setVoiceBackend(backend);
-    setShowBackendSelector(false);
 
     // 1. 设置自动开启麦克风
     setAutoStartMic(true);
@@ -461,25 +560,18 @@ export default function WatchPage() {
       console.error("Failed to enter fullscreen:", e);
     }
 
-    // 4. 获取自适应开头问题（V2 系统）
-    const currentNode = nodes.length > 0 ? nodes[0] : undefined;
-    fetchIntroQuestions({
-      nodeTitle: currentNode?.title,
-      nodeSummary: undefined,
-      keyConcepts: undefined,
-    }).then((questions) => {
-      if (questions && questions.length > 0) {
-        console.log('[V2] 开头问题已生成:', questions.map(q => q.content));
-      }
-    });
-
-    // 5. 加入对话（延迟一点确保全屏状态已更新）
+    // 4. 加入对话（延迟一点确保全屏状态已更新）
     setTimeout(() => {
       setIsInConversation(true);
       // 6. 开始播放视频
       videoPlayerRef.current?.play();
     }, 100);
-  }, [nodes, fetchIntroQuestions]);
+  }, []);
+
+  // 点击 Join Meeting 按钮时直接进入实时模式（精准模式仅在切入点触发）
+  const handleJoinMeetingClick = useCallback(() => {
+    handleSelectBackendAndJoin("doubao_realtime");
+  }, [handleSelectBackendAndJoin]);
 
   // 画板操作
   const handleOpenDrawing = useCallback(() => {
@@ -536,10 +628,24 @@ export default function WatchPage() {
     setIsAISpeaking(speaking);
   }, []);
 
-  // 退出通话 - 只结束对话，不退出全屏
+  // 退出通话 - 立即弹出 loading 弹窗，后台提交学习数据
   const handleEndCall = useCallback(async () => {
-    // V2: 提交学习数据进行分析
-    console.log('[V2] 退出对话，提交学习数据分析...');
+    console.log('[V2] 退出对话，立即显示 loading 弹窗...');
+
+    // 1. 立即清理对话状态
+    setIsInConversation(false);
+    setIsMicActive(false);
+    setAutoStartMic(false);
+
+    // 2. 退出全屏以确保 Dialog Portal 可见
+    if (document.fullscreenElement) {
+      try { await document.exitFullscreen(); } catch { /* ignore */ }
+    }
+
+    // 3. 立即显示 loading 弹窗（analysisData 仍为 null，modal 显示骨架屏）
+    setShowLearningReport(true);
+
+    // 4. 后台提交学习数据
     try {
       const analysis = await submitLearningData({
         videoNodes: nodes.map(n => n.title),
@@ -550,16 +656,37 @@ export default function WatchPage() {
           problemTags: analysis.problemTags,
           nextStrategy: analysis.nextStrategy,
         });
+        setAnalysisData(analysis);
+      } else {
+        // 分析返回 null，关闭弹窗跳转首页
+        setShowLearningReport(false);
+        router.push('/');
       }
     } catch (error) {
       console.error('[V2] 学习分析失败:', error);
+      // 失败时关闭弹窗跳转首页
+      setShowLearningReport(false);
+      router.push('/');
     }
+  }, [submitLearningData, nodes, router]);
+  handleEndCallRef.current = handleEndCall;
 
-    setIsInConversation(false);
-    setShowChatInFullscreen(false);
-    setIsMicActive(false);
-    setAutoStartMic(false);
-  }, [submitLearningData, nodes]);
+  // 关闭学习报告弹窗 → 总是跳转首页
+  const handleReportClose = useCallback(() => {
+    setShowLearningReport(false);
+    setAnalysisData(null);
+    router.push('/');
+  }, [router]);
+
+  // 返回按钮拦截
+  const handleBackClick = useCallback(async () => {
+    if (isInConversation && hasUnsavedData()) {
+      pendingNavigateRef.current = true;
+      await handleEndCall();
+    } else {
+      router.push('/');
+    }
+  }, [isInConversation, hasUnsavedData, handleEndCall, router]);
 
 
   // 视频加载中
@@ -601,14 +728,14 @@ export default function WatchPage() {
       {!isFullscreen && (
         <header className="bg-black/80 backdrop-blur-sm border-b border-white/10">
           <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-4">
-            <Link
-              href="/"
+            <button
+              onClick={handleBackClick}
               className="text-gray-400 hover:text-white transition-colors"
             >
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
               </svg>
-            </Link>
+            </button>
             <div>
               <h1 className="text-white font-semibold">{video.title}</h1>
               <p className="text-gray-400 text-sm">{video.teacher}</p>
@@ -655,7 +782,7 @@ export default function WatchPage() {
                 {/* 视频区域 */}
                 <div
                   className={`relative bg-black ${
-                    showChatInFullscreen && isInConversation ? "flex-1" : "w-full"
+                    showChatInFullscreen ? "flex-1" : "w-full"
                   } h-full`}
                 >
                   <VideoPlayer
@@ -673,7 +800,6 @@ export default function WatchPage() {
                     interventionConfig={interventionConfig}
                     isInPrecisionMode={voiceBackend === "doubao"}
                     onToggleConversation={toggleConversation}
-                    onToggleFullscreen={toggleFullscreen}
                     onToggleChat={toggleChatInFullscreen}
                     onJoinMeeting={handleJoinMeetingClick}
                     onContextUpdate={handleContextUpdate}
@@ -685,11 +811,9 @@ export default function WatchPage() {
                   />
                 </div>
 
-                {/* 聊天面板 - 全屏模式右侧，使用 CSS 控制显示/隐藏以保持对话状态 */}
-                {isInConversation && (
-                  <div className={`w-[350px] shrink-0 h-full border-l border-white/10 bg-black/90 ${
-                    showChatInFullscreen ? "" : "hidden"
-                  }`}>
+                {/* 聊天面板 - 全屏模式右侧，加入对话后显示 */}
+                {hasEverJoined && showChatInFullscreen && (
+                  <div className="w-[350px] shrink-0 h-full border-l border-white/10 bg-black/90">
                     <ChatPanel
                       videoContext={videoContext.context || `正在观看：${video.title}`}
                       currentSubtitle={videoContext.subtitle}
@@ -697,17 +821,19 @@ export default function WatchPage() {
                       videoId={videoId}
                       currentTime={videoContext.currentTime}
                       subtitles={subtitles}
+                      studentId={studentId}
                       isFullscreen={isFullscreen}
                       autoStart={autoStartMic}
                       voiceMode={voiceMode}
                       voiceBackend={voiceBackend}
                       interventionConfig={interventionConfig}
-                      introQuestion={currentQuestion}
+                      isVideoPlaying={isVideoPlaying}
+
                       onLogMessage={logMessage}
                       onVoiceModeChange={setVoiceMode}
                       onVoiceBackendChange={setVoiceBackend}
                       onToggle={toggleConversation}
-                      onClose={toggleChatInFullscreen}
+                      onClose={undefined}
                       onPauseVideo={handlePauseVideo}
                       onResumeVideo={handleResumeVideo}
                       onJumpToTime={handleJumpToTime}
@@ -863,74 +989,31 @@ export default function WatchPage() {
                   })()}
                 </div>
 
-                {/* 中间：功能按钮 */}
-                <div className="flex items-center gap-2">
-                  {/* 字幕按钮 */}
-                  <button
-                    onClick={toggleSubtitles}
-                    className={`p-2.5 rounded-lg transition-colors ${
-                      showSubtitles ? "bg-blue-500 text-white" : "bg-white/10 text-gray-400 hover:text-white"
-                    }`}
-                    title={showSubtitles ? "隐藏字幕" : "显示字幕"}
-                  >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
-                    </svg>
-                  </button>
+                {/* 中间留空 */}
+                <div />
 
-                  {/* 画板按钮 */}
-                  <button
-                    onClick={() => setIsDrawingOpen(!isDrawingOpen)}
-                    className={`p-2.5 rounded-lg transition-colors ${
-                      isDrawingOpen ? "bg-blue-500 text-white" : "bg-white/10 text-gray-400 hover:text-white"
-                    }`}
-                    title={isDrawingOpen ? "关闭画板" : "打开画板"}
-                  >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-                    </svg>
-                  </button>
-
-                  {/* 全屏切换按钮 */}
-                  <button
-                    onClick={toggleFullscreen}
-                    className="p-2.5 rounded-lg bg-white/10 text-gray-400 hover:text-white transition-colors"
-                    title="退出全屏"
-                  >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5l5.25 5.25" />
-                    </svg>
-                  </button>
-
-                  {/* 聊天面板切换按钮 */}
-                  {isInConversation && (
-                    <button
-                      onClick={toggleChatInFullscreen}
-                      className={`p-2.5 rounded-lg transition-colors ${
-                        showChatInFullscreen ? "bg-blue-500 text-white" : "bg-gray-800 text-gray-400 hover:text-white"
-                      }`}
-                      title={showChatInFullscreen ? "隐藏聊天" : "显示聊天"}
-                    >
-                      <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                        <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z" />
-                      </svg>
-                    </button>
-                  )}
-                </div>
-
-                {/* 右侧：退出通话按钮 */}
+                {/* 右侧：退出按钮 */}
                 <div className="flex items-center gap-3">
                   {isInConversation && (
                     <button
                       onClick={handleEndCall}
-                      className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
+                      className="bg-red-500/80 hover:bg-red-500 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors text-sm"
                     >
-                      <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                      <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                         <path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08c-.18-.17-.29-.42-.29-.7 0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28-.79-.74-1.69-1.36-2.67-1.85-.33-.16-.56-.5-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z" />
                       </svg>
                       退出通话
                     </button>
                   )}
+                  <button
+                    onClick={handleBackClick}
+                    className="bg-white/10 hover:bg-white/20 text-white px-5 py-2.5 rounded-lg flex items-center gap-2 transition-colors font-medium"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                    </svg>
+                    退出到主界面
+                  </button>
                 </div>
                 </div>
               </div>
@@ -940,9 +1023,7 @@ export default function WatchPage() {
             <>
               {/* 视频区域 */}
               <div
-                className={`relative bg-black overflow-hidden ${
-                  isInConversation ? "flex-1" : "w-full"
-                }`}
+                className="relative bg-black overflow-hidden flex-1"
               >
                 <div className="relative w-full aspect-video">
                   <VideoPlayer
@@ -961,7 +1042,6 @@ export default function WatchPage() {
                     interventionConfig={interventionConfig}
                     isInPrecisionMode={voiceBackend === "doubao"}
                     onToggleConversation={toggleConversation}
-                    onToggleFullscreen={toggleFullscreen}
                     onToggleChat={toggleChatInFullscreen}
                     onToggleDrawing={() => setIsDrawingOpen(!isDrawingOpen)}
                     onJoinMeeting={handleJoinMeetingClick}
@@ -974,39 +1054,41 @@ export default function WatchPage() {
                 </div>
               </div>
 
-              {/* 聊天面板 - 非全屏模式 */}
-              {isInConversation && (
-                <div className="w-[380px] shrink-0 h-[calc(100vw*9/16*0.65)] max-h-[500px] min-h-[400px]">
-                  <ChatPanel
-                    videoContext={videoContext.context || `正在观看：${video.title}`}
-                    currentSubtitle={videoContext.subtitle}
-                    isActive={isInConversation}
-                    videoId={videoId}
-                    currentTime={videoContext.currentTime}
-                    subtitles={subtitles}
-                    isFullscreen={isFullscreen}
-                    autoStart={autoStartMic}
-                    voiceMode={voiceMode}
-                    voiceBackend={voiceBackend}
-                    interventionConfig={interventionConfig}
-                    introQuestion={currentQuestion}
-                    onLogMessage={logMessage}
-                    onVoiceModeChange={setVoiceMode}
-                    onVoiceBackendChange={setVoiceBackend}
-                    onToggle={toggleConversation}
-                    onClose={undefined}
-                    onPauseVideo={handlePauseVideo}
-                    onResumeVideo={handleResumeVideo}
-                    onJumpToTime={handleJumpToTime}
-                    onEndIntervention={handleEndIntervention}
-                    onOpenDrawing={handleOpenDrawing}
-                    onCloseDrawing={handleCloseDrawing}
-                    onDrawShapes={handleDrawShapes}
-                    onClearDrawing={handleClearDrawing}
-                    onMicStatusChange={handleMicStatusChange}
-                    onAISpeakingChange={handleAISpeakingChange}
-                  />
-                </div>
+              {/* 聊天面板 - 非全屏模式，加入对话后显示 */}
+              {hasEverJoined && (
+              <div className="w-[380px] shrink-0 h-[calc(100vw*9/16*0.65)] max-h-[500px] min-h-[400px]">
+                <ChatPanel
+                  videoContext={videoContext.context || `正在观看：${video.title}`}
+                  currentSubtitle={videoContext.subtitle}
+                  isActive={isInConversation}
+                  videoId={videoId}
+                  currentTime={videoContext.currentTime}
+                  subtitles={subtitles}
+                  studentId={studentId}
+                  isFullscreen={isFullscreen}
+                  autoStart={autoStartMic}
+                  voiceMode={voiceMode}
+                  voiceBackend={voiceBackend}
+                  interventionConfig={interventionConfig}
+                  isVideoPlaying={isVideoPlaying}
+                  introQuestion={currentQuestion}
+                  onLogMessage={logMessage}
+                  onVoiceModeChange={setVoiceMode}
+                  onVoiceBackendChange={setVoiceBackend}
+                  onToggle={toggleConversation}
+                  onClose={undefined}
+                  onPauseVideo={handlePauseVideo}
+                  onResumeVideo={handleResumeVideo}
+                  onJumpToTime={handleJumpToTime}
+                  onEndIntervention={handleEndIntervention}
+                  onOpenDrawing={handleOpenDrawing}
+                  onCloseDrawing={handleCloseDrawing}
+                  onDrawShapes={handleDrawShapes}
+                  onClearDrawing={handleClearDrawing}
+                  onMicStatusChange={handleMicStatusChange}
+                  onAISpeakingChange={handleAISpeakingChange}
+                />
+              </div>
               )}
             </>
           )}
@@ -1048,6 +1130,17 @@ export default function WatchPage() {
         />
       )}
 
+      {/* 学习报告弹窗 */}
+      {showLearningReport && (
+        <LearningReportModal
+          analysis={analysisData}
+          videoTitle={video.title}
+          open={showLearningReport}
+          loading={!analysisData}
+          onClose={handleReportClose}
+        />
+      )}
+
       {/* 紧急播放按钮 - 精准模式下显示在屏幕中央 */}
       {isFullscreen && voiceBackend === "doubao" && (
         <div className="fixed inset-0 flex items-center justify-center z-[99999] pointer-events-none">
@@ -1069,61 +1162,6 @@ export default function WatchPage() {
         </div>
       )}
 
-      {/* 语音后端选择弹窗 */}
-      {showBackendSelector && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-          <div className="bg-[#1a1a1a] rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl">
-            <h2 className="text-white text-xl font-semibold mb-2 text-center">选择对话模式</h2>
-            <p className="text-gray-400 text-sm mb-6 text-center">请选择 AI 老师的响应方式</p>
-
-            <div className="space-y-3">
-              {/* 实时模式 */}
-              <button
-                onClick={() => handleSelectBackendAndJoin("doubao_realtime")}
-                className="w-full p-4 rounded-xl bg-[#2a2a2a] hover:bg-[#333] border-2 border-transparent hover:border-[#4ECDC4] transition-all text-left group"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 rounded-full bg-[#4ECDC4]/20 flex items-center justify-center">
-                    <svg className="w-6 h-6 text-[#4ECDC4]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                    </svg>
-                  </div>
-                  <div className="flex-1">
-                    <div className="text-white font-medium">实时模式</div>
-                    <div className="text-gray-400 text-sm">响应快速，适合日常对话</div>
-                  </div>
-                  <div className="text-[#4ECDC4] text-xs px-2 py-1 bg-[#4ECDC4]/10 rounded">推荐</div>
-                </div>
-              </button>
-
-              {/* 精准模式 */}
-              <button
-                onClick={() => handleSelectBackendAndJoin("doubao")}
-                className="w-full p-4 rounded-xl bg-[#2a2a2a] hover:bg-[#333] border-2 border-transparent hover:border-[#FF6B6B] transition-all text-left group"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 rounded-full bg-[#FF6B6B]/20 flex items-center justify-center">
-                    <svg className="w-6 h-6 text-[#FF6B6B]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                  </div>
-                  <div className="flex-1">
-                    <div className="text-white font-medium">精准模式</div>
-                    <div className="text-gray-400 text-sm">画图更准确，延迟稍高</div>
-                  </div>
-                </div>
-              </button>
-            </div>
-
-            <button
-              onClick={() => setShowBackendSelector(false)}
-              className="w-full mt-4 py-2 text-gray-400 hover:text-white text-sm transition-colors"
-            >
-              取消
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

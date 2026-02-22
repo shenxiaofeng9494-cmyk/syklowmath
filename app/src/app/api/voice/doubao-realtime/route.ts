@@ -471,7 +471,13 @@ async function createSession(config: {
 
       ws.send(startSessionFrame);
 
+      // IMPORTANT: Store session in map BEFORE resolving, so polls can find it
       sessions.set(sessionId, session);
+      console.log(`Realtime session ${sessionId} stored in map, resolving create`);
+
+      // Resolve immediately after WS is open and session is stored
+      // The client can start polling now - events will be queued
+      resolve(NextResponse.json({ sessionId, status: "connected" }));
     });
 
     ws.on("message", (data: Buffer) => {
@@ -485,6 +491,7 @@ async function createSession(config: {
 
         if (parsed.eventId === EVENTS.SESSION_STARTED && parsed.payloadJson?.dialog_id) {
           session.dialogId = String(parsed.payloadJson.dialog_id);
+          console.log(`Realtime session ${sessionId} got dialogId: ${session.dialogId}`);
         }
 
         if (parsed.eventId) {
@@ -536,19 +543,6 @@ async function createSession(config: {
       setTimeout(() => {
         sessions.delete(sessionId);
       }, 30000);
-    });
-
-    const waitForSessionStart = setTimeout(() => {
-      if (!session.closed) {
-        resolve(NextResponse.json({ sessionId, status: "connected" }));
-      }
-    }, 300);
-
-    ws.on("message", () => {
-      if (session.dialogId) {
-        clearTimeout(waitForSessionStart);
-        resolve(NextResponse.json({ sessionId, status: "connected", dialogId: session.dialogId }));
-      }
     });
   });
 }

@@ -45,11 +45,11 @@ export async function POST(req: NextRequest) {
       top_p: body.top_p ?? 0.9,
     };
 
-    // 只有当 tools 存在且非空时才添加（暂时禁用以支持不支持 function calling 的模型）
-    // if (body.tools && body.tools.length > 0) {
-    //   doubaoRequest.tools = body.tools;
-    //   doubaoRequest.tool_choice = body.tool_choice || "auto";
-    // }
+    // 只有当 tools 存在且非空时才添加
+    if (body.tools && body.tools.length > 0) {
+      doubaoRequest.tools = body.tools;
+      doubaoRequest.tool_choice = body.tool_choice || "auto";
+    }
 
     // If not streaming, make a simple request
     if (!doubaoRequest.stream) {

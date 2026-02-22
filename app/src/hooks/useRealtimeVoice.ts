@@ -35,6 +35,8 @@ interface UseRealtimeVoiceOptions {
   videoId?: string;                    // 视频ID，用于 RAG 检索
   currentTime?: number;                // 当前播放时间
   subtitles?: SubtitleCue[];           // 字幕列表，用于精准跳转
+  studentId?: string;                  // V2 自适应：学生ID，用于获取画像
+  learningSessionId?: string;          // 跨模式上下文共享：学习会话ID
   onSpeechStart?: () => void;          // 检测到用户开始说话
   onSpeechEnd?: () => void;            // 检测到用户说完话
   onTranscript?: (text: string, isFinal: boolean) => void;
@@ -502,6 +504,8 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions) {
           videoContext: optionsRef.current.videoContext,
           videoId: optionsRef.current.videoId,
           currentTime: optionsRef.current.currentTime,
+          studentId: optionsRef.current.studentId, // V2 自适应：传递学生ID获取画像
+          learningSessionId: optionsRef.current.learningSessionId, // 跨模式上下文共享
         }),
       });
 

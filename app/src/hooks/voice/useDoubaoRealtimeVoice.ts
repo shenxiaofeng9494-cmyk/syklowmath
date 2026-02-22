@@ -48,6 +48,12 @@ type RealtimeEvent = {
   audioBase64?: string;
 };
 
+// Check if transcript is a video resume command (short utterances only)
+const RESUME_PATTERN = /继续(视频|看|播放|吧)?|好了|懂了|可以了|知道了|行了/;
+function isResumeCommand(text: string): boolean {
+  return text.length < 15 && RESUME_PATTERN.test(text);
+}
+
 interface SessionConfig {
   systemPrompt: string;
   tools: ToolDefinition[];
@@ -77,6 +83,7 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
   const sendingRef = useRef(false);
   const currentAnswerRef = useRef("");
   const currentUserMessageRef = useRef("");
+  const pollErrorCountRef = useRef(0); // Track consecutive poll errors for auto-reconnect
   const sessionConfigRef = useRef<SessionConfig | null>(null);
   const toolDetectionTriggeredRef = useRef(false); // Prevent duplicate detection
   const disconnectingRef = useRef(false); // Prevent audio enqueue during disconnect
@@ -219,14 +226,22 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
 
       switch (event.eventId) {
         case EVENTS.ASR_INFO: {
+          // User started speaking
           optionsRef.current.onSpeechStart?.();
           break;
         }
         case EVENTS.ASR_RESPONSE: {
           const results = (event.payload?.results as Array<{ text: string; is_interim: boolean }> | undefined) || [];
           for (const result of results) {
+            // Resume keyword detection (quick shortcut without waiting for AI)
+            if (!result.is_interim && result.text && isResumeCommand(result.text)) {
+              console.log('[Realtime] Resume command detected:', result.text);
+              optionsRef.current.onTranscript?.(result.text, true);
+              optionsRef.current.onResumeVideo?.();
+              continue;
+            }
+            // Forward transcript directly (no gating)
             optionsRef.current.onTranscript?.(result.text, !result.is_interim);
-            // Save final user message for tool detection
             if (!result.is_interim && result.text) {
               currentUserMessageRef.current = result.text;
             }
@@ -270,7 +285,6 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
             const userMessage = currentUserMessageRef.current;
 
             // Use Doubao Chat to detect tool calls, then complete the answer
-            // Must await to ensure pendingWhiteboard is set before message is saved
             detectAndExecuteTools(answer, userMessage).then(() => {
               optionsRef.current.onAnswerComplete?.(answer);
               optionsRef.current.onComplete?.();
@@ -284,7 +298,7 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
           break;
         }
         case EVENTS.TTS_RESPONSE: {
-          // Skip audio enqueue if disconnecting to prevent audio playing after exit
+          // Skip audio if disconnecting
           if (event.audioBase64 && !disconnectingRef.current) {
             const audioBuffer = Uint8Array.from(atob(event.audioBase64), (c) => c.charCodeAt(0)).buffer;
             playback.enqueue(audioBuffer);
@@ -318,6 +332,18 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
       }
 
       const data = await response.json();
+      pollErrorCountRef.current = 0; // Reset error counter on success
+
+      // Check for fatal session errors (e.g. DialogAudioIdleTimeoutError)
+      const isFatalError = data.error && (
+        typeof data.error === 'string'
+          ? data.error.includes('TimeoutError') || data.error.includes('SessionExpired') || data.error.includes('SessionClosed')
+          : (data.error.error && (
+              String(data.error.error).includes('TimeoutError') ||
+              String(data.error.error).includes('SessionExpired') ||
+              String(data.error.error).includes('SessionClosed')
+            ))
+      );
 
       if (data.error) {
         console.error("Realtime error:", data.error);
@@ -327,16 +353,45 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
         processEvents(data.events as RealtimeEvent[]);
       }
 
-      if (data.closed) {
-        setIsConnected(false);
-        setIsListening(false);
+      if (data.closed || isFatalError) {
+        console.warn(`[Realtime] Session dead (closed=${data.closed}, fatalError=${isFatalError}), cleaning up for auto-reconnect`);
+        // Clear ALL state so connect() can create a fresh session
+        sessionIdRef.current = null;
+        audioQueueRef.current = [];
+        sendingRef.current = false;
         if (pollIntervalRef.current) {
           clearInterval(pollIntervalRef.current);
           pollIntervalRef.current = null;
         }
+        if (heartbeatIntervalRef.current) {
+          clearInterval(heartbeatIntervalRef.current);
+          heartbeatIntervalRef.current = null;
+        }
+        // Setting isConnected=false triggers auto-reconnect via VoiceInteraction's isActive effect
+        setIsConnected(false);
+        setIsListening(false);
       }
     } catch (error) {
       console.error("Realtime poll error:", error);
+      pollErrorCountRef.current++;
+      // After 5 consecutive poll errors, assume session is dead and clean up
+      if (pollErrorCountRef.current >= 5) {
+        console.warn(`[Realtime] ${pollErrorCountRef.current} consecutive poll errors, session likely dead. Cleaning up.`);
+        sessionIdRef.current = null;
+        audioQueueRef.current = [];
+        sendingRef.current = false;
+        if (pollIntervalRef.current) {
+          clearInterval(pollIntervalRef.current);
+          pollIntervalRef.current = null;
+        }
+        if (heartbeatIntervalRef.current) {
+          clearInterval(heartbeatIntervalRef.current);
+          heartbeatIntervalRef.current = null;
+        }
+        pollErrorCountRef.current = 0;
+        setIsConnected(false);
+        setIsListening(false);
+      }
     }
   }, [processEvents]);
 
@@ -422,6 +477,16 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
 
   const connect = useCallback(async () => {
     if (sessionIdRef.current) {
+      // Session already exists (e.g. React Strict Mode second mount)
+      // Ensure connected state and intervals are properly set up
+      console.log('[Realtime] Session already exists, restoring state:', sessionIdRef.current);
+      setIsConnected(true);
+      if (!pollIntervalRef.current) {
+        pollIntervalRef.current = setInterval(pollEvents, 200);
+      }
+      if (!heartbeatIntervalRef.current) {
+        heartbeatIntervalRef.current = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
+      }
       return;
     }
 
@@ -432,6 +497,8 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
         videoContext: optionsRef.current.videoContext,
         videoId: optionsRef.current.videoId,
         currentTime: optionsRef.current.currentTime,
+        studentId: optionsRef.current.studentId, // V2 自适应：传递学生ID获取画像
+        learningSessionId: optionsRef.current.learningSessionId, // 跨模式上下文共享
         backend: "doubao_realtime", // Specify backend for Doubao Realtime S2S
       }),
     });
@@ -562,6 +629,21 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
       }),
     });
   }, [isConnected]);
+
+  // Restore poll/heartbeat intervals if they were cleared (e.g. by HMR cleanup)
+  // but the session is still alive
+  useEffect(() => {
+    if (isConnected && sessionIdRef.current) {
+      if (!pollIntervalRef.current) {
+        console.log('[Realtime] Restoring poll interval (lost during HMR/re-mount)');
+        pollIntervalRef.current = setInterval(pollEvents, 200);
+      }
+      if (!heartbeatIntervalRef.current) {
+        console.log('[Realtime] Restoring heartbeat interval (lost during HMR/re-mount)');
+        heartbeatIntervalRef.current = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
+      }
+    }
+  }, [isConnected, pollEvents, sendHeartbeat]);
 
   useEffect(() => {
     return () => {

@@ -2,7 +2,7 @@
 // V2 自适应提问系统 - 前端 Hook
 // ============================================================
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import type {
   OrchestratorResponse,
   GeneratedQuestion,
@@ -10,6 +10,19 @@ import type {
   ChatMessage,
   CheckpointResponse,
 } from '@/lib/agents/types';
+
+// localStorage key 和 saved data 结构
+function getStorageKey(videoId: string, studentId: string) {
+  return `mathtalk_session_${videoId}_${studentId}`;
+}
+
+interface SavedSessionData {
+  conversationLog: ChatMessage[];
+  checkpointResponses: CheckpointResponse[];
+  videoId: string;
+  studentId: string;
+  savedAt: number;
+}
 
 interface UseAdaptiveQuestionsOptions {
   studentId: string;
@@ -38,6 +51,64 @@ export function useAdaptiveQuestions(options: UseAdaptiveQuestionsOptions) {
   // 对话日志收集
   const conversationLogRef = useRef<ChatMessage[]>([]);
   const checkpointResponsesRef = useRef<CheckpointResponse[]>([]);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 预生成检查点动态问题缓存
+  const pregeneratedRef = useRef<Map<string, GeneratedQuestion>>(new Map());
+
+  // localStorage 持久化：debounced save
+  const saveToStorage = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const data: SavedSessionData = {
+        conversationLog: conversationLogRef.current,
+        checkpointResponses: checkpointResponsesRef.current,
+        videoId,
+        studentId,
+        savedAt: Date.now(),
+      };
+      localStorage.setItem(getStorageKey(videoId, studentId), JSON.stringify(data));
+    } catch {
+      // quota exceeded or other storage error — silently ignore
+    }
+  }, [videoId, studentId]);
+
+  const debouncedSave = useCallback(() => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(saveToStorage, 500);
+  }, [saveToStorage]);
+
+  const clearStorage = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.removeItem(getStorageKey(videoId, studentId));
+    } catch { /* ignore */ }
+  }, [videoId, studentId]);
+
+  // Restore from localStorage on init
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = localStorage.getItem(getStorageKey(videoId, studentId));
+      if (!raw) return;
+      const saved: SavedSessionData = JSON.parse(raw);
+      // Only restore if data is less than 24 hours old
+      if (Date.now() - saved.savedAt > 24 * 60 * 60 * 1000) {
+        localStorage.removeItem(getStorageKey(videoId, studentId));
+        return;
+      }
+      if (saved.conversationLog?.length) {
+        conversationLogRef.current = saved.conversationLog;
+      }
+      if (saved.checkpointResponses?.length) {
+        checkpointResponsesRef.current = saved.checkpointResponses;
+      }
+      console.log('[useAdaptiveQuestions] Restored session from localStorage:', {
+        messages: saved.conversationLog?.length ?? 0,
+        checkpoints: saved.checkpointResponses?.length ?? 0,
+      });
+    } catch { /* corrupted data — ignore */ }
+  }, [videoId, studentId]);
 
   /**
    * 进入视频时获取开头问题
@@ -173,6 +244,7 @@ export function useAdaptiveQuestions(options: UseAdaptiveQuestionsOptions) {
         // 清空收集的数据
         conversationLogRef.current = [];
         checkpointResponsesRef.current = [];
+        clearStorage();
 
         return data.data.analysis;
       }
@@ -185,7 +257,7 @@ export function useAdaptiveQuestions(options: UseAdaptiveQuestionsOptions) {
       setState(prev => ({ ...prev, isLoading: false }));
       return null;
     }
-  }, [studentId, videoId, videoTitle, onError]);
+  }, [studentId, videoId, videoTitle, onError, clearStorage]);
 
   /**
    * 记录对话消息（用于后续分析）
@@ -196,14 +268,16 @@ export function useAdaptiveQuestions(options: UseAdaptiveQuestionsOptions) {
       content,
       timestamp: Date.now(),
     });
-  }, []);
+    debouncedSave();
+  }, [debouncedSave]);
 
   /**
    * 记录检查点回答
    */
   const logCheckpointResponse = useCallback((response: CheckpointResponse) => {
     checkpointResponsesRef.current.push(response);
-  }, []);
+    debouncedSave();
+  }, [debouncedSave]);
 
   /**
    * 意图检查（在语音输入前调用）
@@ -225,6 +299,90 @@ export function useAdaptiveQuestions(options: UseAdaptiveQuestionsOptions) {
       // 出错时默认响应
       return { shouldRespond: true, reason: 'Error, defaulting to respond' };
     }
+  }, []);
+
+  /**
+   * 检查是否有未提交的对话数据
+   */
+  const hasUnsavedData = useCallback(() => {
+    return conversationLogRef.current.length > 0;
+  }, []);
+
+  /**
+   * 获取用于 sendBeacon 的数据负载
+   */
+  const getBeaconPayload = useCallback(() => {
+    return {
+      intent: 'video_ended' as const,
+      studentId,
+      videoId,
+      payload: {
+        videoTitle,
+        conversationLog: conversationLogRef.current,
+        checkpointResponses: checkpointResponsesRef.current,
+        sessionId: `session-${Date.now()}`,
+      },
+    };
+  }, [studentId, videoId, videoTitle]);
+
+  /**
+   * 预生成所有检查点的动态问题（并行调用 LLM，结果存入缓存）
+   */
+  const pregenerateCheckpointQuestions = useCallback(async (checkpoints: Array<{
+    id: string;
+    title: string;
+    summary?: string;
+    keyConcepts?: string[];
+  }>) => {
+    console.log(`[V2] Pre-generating questions for ${checkpoints.length} checkpoints...`);
+
+    const results = await Promise.allSettled(
+      checkpoints.map(async (cp) => {
+        const res = await fetch('/api/agent/main', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            intent: 'checkpoint_reached',
+            studentId,
+            videoId,
+            payload: {
+              videoTitle,
+              checkpointNode: {
+                title: cp.title,
+                summary: cp.summary,
+                keyConcepts: cp.keyConcepts,
+              },
+            },
+          }),
+        });
+        const data: OrchestratorResponse = await res.json();
+        if (data.action === 'ask_questions' && data.data?.questions?.[0]) {
+          return { id: cp.id, question: data.data.questions[0] };
+        }
+        return null;
+      })
+    );
+
+    let cached = 0;
+    for (const result of results) {
+      if (result.status === 'fulfilled' && result.value) {
+        pregeneratedRef.current.set(result.value.id, result.value.question);
+        cached++;
+      }
+    }
+    console.log(`[V2] Pre-generation complete: ${cached}/${checkpoints.length} questions cached`);
+  }, [studentId, videoId, videoTitle]);
+
+  /**
+   * 获取预生成的检查点问题（命中后从缓存删除，一次性使用）
+   */
+  const getPregeneratedQuestion = useCallback((checkpointId: string): GeneratedQuestion | null => {
+    const question = pregeneratedRef.current.get(checkpointId) || null;
+    if (question) {
+      pregeneratedRef.current.delete(checkpointId);
+      console.log(`[V2] Pre-generated question cache hit for checkpoint: ${checkpointId}`);
+    }
+    return question;
   }, []);
 
   /**
@@ -260,10 +418,16 @@ export function useAdaptiveQuestions(options: UseAdaptiveQuestionsOptions) {
     fetchCheckpointQuestion,
     submitLearningData,
     checkIntent,
+    pregenerateCheckpointQuestions,
+    getPregeneratedQuestion,
 
     // 日志记录
     logMessage,
     logCheckpointResponse,
+
+    // 会话保护
+    hasUnsavedData,
+    getBeaconPayload,
 
     // 问题控制
     clearCurrentQuestion,

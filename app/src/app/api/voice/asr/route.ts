@@ -3,32 +3,24 @@
  *
  * Since browser WebSocket cannot set custom HTTP headers required by Doubao ASR,
  * this route acts as a proxy:
- * 1. Client sends audio via POST requests
+ * 1. Client sends audio via POST requests (binary or base64 JSON)
  * 2. Server maintains WebSocket connection to Doubao ASR with proper auth headers
- * 3. Server returns transcription results
+ * 3. Results pushed via SSE (see stream/route.ts) or polled here
  *
  * Protocol: Doubao BigModel Streaming ASR
  * URL: wss://openspeech.bytedance.com/api/v3/sauc/bigmodel
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { EventEmitter } from "events";
+import { sessions } from "./sessions";
+import type { ASRSession } from "./sessions";
+
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const WebSocket = require("ws");
 
-// Type for WebSocket instance
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type WebSocketInstance = any;
-
 // Doubao ASR WebSocket URL (双向流式模式)
 const ASR_WEBSOCKET_URL = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel";
-
-// Store active sessions (in production, use Redis or similar)
-const sessions = new Map<string, {
-  ws: WebSocketInstance;
-  results: Array<{ text: string; definite: boolean }>;
-  error: string | null;
-  closed: boolean;
-}>();
 
 // Protocol constants
 const PROTOCOL = {
@@ -147,7 +139,19 @@ export async function POST(req: NextRequest) {
   try {
     const contentType = req.headers.get("content-type") || "";
 
-    // Check for JSON (session management) vs binary (audio data)
+    // Binary audio data (application/octet-stream)
+    if (contentType.includes("application/octet-stream")) {
+      const sessionId = req.headers.get("x-session-id");
+      const isLast = req.headers.get("x-is-last") === "true";
+
+      if (!sessionId) {
+        return NextResponse.json({ error: "Missing X-Session-Id header" }, { status: 400 });
+      }
+
+      return await sendAudioBinary(sessionId, req, isLast);
+    }
+
+    // JSON (session management + legacy base64 audio)
     if (contentType.includes("application/json")) {
       const body = await req.json();
       const { action, sessionId, audioBase64 } = body;
@@ -155,9 +159,9 @@ export async function POST(req: NextRequest) {
       if (action === "create") {
         return await createSession();
       } else if (action === "audio" && sessionId && audioBase64) {
-        return await sendAudio(sessionId, audioBase64, false);
+        return await sendAudioBase64(sessionId, audioBase64, false);
       } else if (action === "end" && sessionId) {
-        return await sendAudio(sessionId, "", true);
+        return await sendAudioBase64(sessionId, "", true);
       } else if (action === "results" && sessionId) {
         return getResults(sessionId);
       } else if (action === "close" && sessionId) {
@@ -202,11 +206,12 @@ async function createSession(): Promise<NextResponse> {
       },
     });
 
-    const session = {
+    const session: ASRSession = {
       ws,
-      results: [] as Array<{ text: string; definite: boolean }>,
-      error: null as string | null,
+      results: [],
+      error: null,
       closed: false,
+      emitter: new EventEmitter(),
     };
 
     const timeout = setTimeout(() => {
@@ -254,9 +259,23 @@ async function createSession(): Promise<NextResponse> {
         const { messageType, payload } = parseServerResponse(data);
 
         if (messageType === PROTOCOL.MSG_SERVER_ERROR) {
-          console.error(`ASR session ${sessionId} server error:`, payload);
+          // Log raw bytes for debugging
+          const hexDump = data.slice(0, Math.min(64, data.length)).toString("hex");
+          console.error(`[ASR] session ${sessionId} SERVER ERROR:`, {
+            messageType,
+            payload,
+            rawHex: hexDump,
+            dataLen: data.length,
+          });
           session.error = JSON.stringify(payload);
+          session.emitter.emit("error", session.error);
           return;
+        }
+
+        // Log all message types for debugging
+        if (messageType !== PROTOCOL.MSG_FULL_SERVER_RESPONSE) {
+          const hexDump2 = data.slice(0, Math.min(32, data.length)).toString("hex");
+          console.log(`[ASR] session ${sessionId} msg type=${messageType}, payload=`, payload ? JSON.stringify(payload).substring(0, 200) : null);
         }
 
         if (messageType === PROTOCOL.MSG_FULL_SERVER_RESPONSE && payload) {
@@ -265,17 +284,15 @@ async function createSession(): Promise<NextResponse> {
           if (result?.utterances) {
             for (const utterance of result.utterances) {
               console.log(`[ASR] Utterance: text="${utterance.text}", definite=${utterance.definite}`);
-              session.results.push({
-                text: utterance.text,
-                definite: utterance.definite,
-              });
+              const asrResult = { text: utterance.text, definite: utterance.definite };
+              session.results.push(asrResult);
+              session.emitter.emit("result", asrResult);
             }
           } else if (result?.text) {
             console.log(`[ASR] Result text: "${result.text}", definite=true (fallback)`);
-            session.results.push({
-              text: result.text,
-              definite: true,
-            });
+            const asrResult = { text: result.text, definite: true };
+            session.results.push(asrResult);
+            session.emitter.emit("result", asrResult);
           }
         }
       } catch (e) {
@@ -288,11 +305,14 @@ async function createSession(): Promise<NextResponse> {
       console.error(`ASR session ${sessionId} error:`, error);
       session.error = error.message;
       session.closed = true;
+      session.emitter.emit("error", error.message);
+      session.emitter.emit("closed");
     });
 
     ws.on("close", (code: number, reason: Buffer) => {
       console.log(`ASR session ${sessionId} closed:`, code, reason.toString());
       session.closed = true;
+      session.emitter.emit("closed");
 
       // Clean up session after 30 seconds
       setTimeout(() => {
@@ -302,7 +322,37 @@ async function createSession(): Promise<NextResponse> {
   });
 }
 
-async function sendAudio(
+// Send binary audio directly from request body (no base64 overhead)
+async function sendAudioBinary(
+  sessionId: string,
+  req: NextRequest,
+  isLast: boolean
+): Promise<NextResponse> {
+  const session = sessions.get(sessionId);
+
+  if (!session) {
+    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  }
+
+  if (session.closed) {
+    return NextResponse.json({ error: "Session closed" }, { status: 410 });
+  }
+
+  if (session.ws.readyState !== WebSocket.OPEN) {
+    return NextResponse.json({ error: "WebSocket not connected" }, { status: 503 });
+  }
+
+  const arrayBuffer = await req.arrayBuffer();
+  const audioData = Buffer.from(arrayBuffer);
+  const frame = buildAudioFrame(audioData, isLast);
+
+  session.ws.send(frame);
+
+  return NextResponse.json({ status: "sent", isLast });
+}
+
+// Legacy: send base64-encoded audio from JSON body
+async function sendAudioBase64(
   sessionId: string,
   audioBase64: string,
   isLast: boolean
@@ -363,6 +413,7 @@ function closeSession(sessionId: string): NextResponse {
   const session = sessions.get(sessionId);
 
   if (session) {
+    session.emitter.removeAllListeners();
     if (session.ws.readyState === WebSocket.OPEN) {
       // Send end frame before closing
       const frame = buildAudioFrame(Buffer.alloc(0), true);
