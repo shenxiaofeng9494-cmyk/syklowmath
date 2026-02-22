@@ -18,6 +18,10 @@ export async function POST(
       )
     }
 
+    if (!supabase) {
+      return NextResponse.json({ error: '数据库未配置' }, { status: 503 })
+    }
+
     // 验证游戏是否存在
     const { data: game, error: gameError } = await supabase
       .from('video_games')
@@ -77,6 +81,10 @@ export async function GET(
   try {
     const { id } = await params
     const gameId = id
+
+    if (!supabase) {
+      return NextResponse.json({ error: '数据库未配置' }, { status: 503 })
+    }
 
     const { data: feedback, error } = await supabase
       .from('game_feedback')
