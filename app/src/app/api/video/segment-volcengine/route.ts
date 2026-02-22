@@ -90,6 +90,12 @@ export async function POST(request: NextRequest) {
           return
         }
 
+        if (!supabase) {
+          sendProgress('error', 0, '数据库未配置')
+          controller.close()
+          return
+        }
+
         // Step 1: 加载字幕数据
         sendProgress('init', 5, '加载字幕数据...')
 

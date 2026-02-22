@@ -62,6 +62,12 @@ export async function POST(request: NextRequest) {
           return
         }
 
+        if (!supabase) {
+          sendProgress('error', 0, '数据库未配置')
+          controller.close()
+          return
+        }
+
         // Step 1: 语音转写
         sendProgress('transcribe', 0, '开始语音转写...')
 

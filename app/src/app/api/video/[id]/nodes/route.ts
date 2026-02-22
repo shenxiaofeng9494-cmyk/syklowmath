@@ -27,6 +27,10 @@ export async function GET(
   try {
     const { id } = await params
 
+    if (!supabase) {
+      return NextResponse.json({ error: '数据库未配置' }, { status: 503 })
+    }
+
     // 首先验证视频是否存在
     const { data: video, error: videoError } = await supabase
       .from('videos')
@@ -96,6 +100,10 @@ export async function PATCH(
         { error: 'Invalid request: nodes array is required' },
         { status: 400 }
       )
+    }
+
+    if (!supabase) {
+      return NextResponse.json({ error: '数据库未配置' }, { status: 503 })
     }
 
     // 获取视频信息以验证时长

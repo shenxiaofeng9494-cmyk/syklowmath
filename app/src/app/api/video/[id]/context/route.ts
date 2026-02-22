@@ -31,6 +31,10 @@ export async function POST(request: NextRequest, { params }: ContextParams) {
       )
     }
 
+    if (!supabase) {
+      return NextResponse.json({ error: '数据库未配置' }, { status: 503 })
+    }
+
     // 1. 获取视频信息
     const { data: video, error: videoError } = await supabase
       .from('videos')

@@ -27,6 +27,10 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    if (!supabase) {
+      return NextResponse.json({ error: '数据库未配置' }, { status: 503 })
+    }
+
     // 获取游戏信息
     const { data: game, error: gameError } = await supabase
       .from('video_games')

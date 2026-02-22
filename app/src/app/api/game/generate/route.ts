@@ -29,6 +29,10 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    if (!supabase) {
+      return NextResponse.json({ error: '数据库未配置' }, { status: 503 })
+    }
+
     // 获取视频信息
     const { data: video, error: videoError } = await supabase
       .from('videos')
@@ -146,6 +150,10 @@ export async function GET(request: NextRequest) {
       { error: '缺少必要参数：videoId' },
       { status: 400 }
     )
+  }
+
+  if (!supabase) {
+    return NextResponse.json({ error: '数据库未配置' }, { status: 503 })
   }
 
   let query = supabase.from('video_games').select('*').eq('video_id', videoId)

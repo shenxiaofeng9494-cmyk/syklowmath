@@ -111,6 +111,10 @@ export async function DELETE(
   try {
     const { id } = await params
 
+    if (!supabase) {
+      return NextResponse.json({ error: '数据库未配置' }, { status: 503 })
+    }
+
     // 开始事务删除：先删除相关数据，再删除视频
     // 1. 删除相关游戏
     const { error: gamesError } = await supabase
