@@ -800,9 +800,9 @@ export function VoiceInteraction({
         console.log("[VoiceChat] Doubao connected, starting audio capture...");
         await doubaoRealtimeVoice.startListening();
         setStatus("listening");
-        // AI 主动打招呼，让学生知道已连接成功
+        // AI 主动打招呼，让学生知道已连接成功（silent: 不在聊天中显示指令）
         console.log("[VoiceChat] Sending greeting to trigger AI hello...");
-        doubaoRealtimeVoice.sendTextMessage("（学生刚刚暂停了视频准备提问，请用一句简短的话跟学生打个招呼，告诉他可以开始提问了，不超过15个字）");
+        doubaoRealtimeVoice.sendTextMessage("（简短打个招呼，不超过8个字）", { silent: true });
       })
       .catch((err) => {
         console.error("[VoiceChat] Failed to connect Doubao:", err);

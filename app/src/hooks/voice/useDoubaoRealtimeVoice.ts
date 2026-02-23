@@ -458,7 +458,10 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
 
   const capture = useAudioCapture({
     onAudioChunk: (chunk) => {
-      if (!isListening || !isConnected) return;
+      // Use refs instead of state to avoid stale closure — state values
+      // (isListening, isConnected) get captured at render time and don't
+      // update when the AudioWorklet fires callbacks between renders.
+      if (!sessionIdRef.current || disconnectingRef.current) return;
       audioQueueRef.current.push(chunk);
       processAudioQueue();
     },
@@ -596,14 +599,16 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
   }, [playback]);
 
   const startListening = useCallback(async () => {
-    if (!isConnected) {
-      console.error("Not connected");
+    // Use ref instead of state to avoid stale closure when called
+    // from .then() chain after connect() (state hasn't re-rendered yet)
+    if (!sessionIdRef.current) {
+      console.error("Not connected (no session)");
       return;
     }
 
     await captureStartRef.current();
     setIsListening(true);
-  }, [isConnected]);
+  }, []);
 
   const stopListening = useCallback(() => {
     console.log("useDoubaoRealtimeVoice stopListening called");
@@ -611,14 +616,17 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
     setIsListening(false);
   }, []);
 
-  const sendTextMessage = useCallback(async (text: string) => {
+  const sendTextMessage = useCallback(async (text: string, options?: { silent?: boolean }) => {
     // Use ref instead of state to avoid stale closure after connect() resolves
     if (!sessionIdRef.current) {
       console.error("Not connected (no session)");
       return;
     }
 
-    optionsRef.current.onTranscript?.(text, true);
+    // silent: don't show as user message in chat (used for system prompts like greeting)
+    if (!options?.silent) {
+      optionsRef.current.onTranscript?.(text, true);
+    }
 
     await fetch(REALTIME_PROXY_URL, {
       method: "POST",
