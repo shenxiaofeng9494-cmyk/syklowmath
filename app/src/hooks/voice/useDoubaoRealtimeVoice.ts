@@ -395,6 +395,9 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
     }
   }, [processEvents]);
 
+  // Track audio sends for debug logging
+  const audioSendCountRef = useRef(0);
+
   const processAudioQueue = useCallback(async () => {
     if (sendingRef.current || audioQueueRef.current.length === 0) return;
     if (!sessionIdRef.current) return;
@@ -402,12 +405,20 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
     sendingRef.current = true;
 
     while (audioQueueRef.current.length > 0) {
-      const audioData = audioQueueRef.current.shift();
-      if (!audioData) break;
+      // Batch all queued chunks into a single request to avoid
+      // HTTP round-trip bottleneck (10 chunks/s vs ~3 fetches/s)
+      const chunks = audioQueueRef.current.splice(0, audioQueueRef.current.length);
+      const totalSize = chunks.reduce((sum, c) => sum + c.byteLength, 0);
+      const combined = new Uint8Array(totalSize);
+      let offset = 0;
+      for (const chunk of chunks) {
+        combined.set(new Uint8Array(chunk), offset);
+        offset += chunk.byteLength;
+      }
 
       try {
-        const audioBase64 = arrayBufferToBase64(audioData);
-        await fetch(REALTIME_PROXY_URL, {
+        const audioBase64 = arrayBufferToBase64(combined.buffer);
+        const resp = await fetch(REALTIME_PROXY_URL, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -416,7 +427,10 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
             audioBase64,
           }),
         });
-        // Update last audio sent time
+        audioSendCountRef.current++;
+        if (audioSendCountRef.current % 10 === 1) {
+          console.log(`[AudioPipeline] batch #${audioSendCountRef.current}, ${chunks.length} chunks, ${totalSize}B, status=${resp.status}`);
+        }
         lastAudioSentTimeRef.current = Date.now();
       } catch (error) {
         console.error("Realtime send audio error:", error);
@@ -456,8 +470,16 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
     }
   }, []);
 
+  // Track audio chunk count for debug logging
+  const audioChunkCountRef = useRef(0);
+
   const capture = useAudioCapture({
     onAudioChunk: (chunk) => {
+      audioChunkCountRef.current++;
+      // Log every 50th chunk (~5 seconds of audio) to confirm pipeline is active
+      if (audioChunkCountRef.current % 50 === 1) {
+        console.log(`[AudioPipeline] chunk #${audioChunkCountRef.current}, size=${chunk.byteLength}, session=${!!sessionIdRef.current}, disconnecting=${disconnectingRef.current}`);
+      }
       // Use refs instead of state to avoid stale closure — state values
       // (isListening, isConnected) get captured at render time and don't
       // update when the AudioWorklet fires callbacks between renders.
