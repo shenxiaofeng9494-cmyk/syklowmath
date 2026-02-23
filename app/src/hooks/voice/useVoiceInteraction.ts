@@ -486,8 +486,9 @@ export function useVoiceInteraction(options: UseVoiceInteractionOptions): UseVoi
 
   // Start listening (microphone)
   const startListening = useCallback(async () => {
-    if (!isConnected) {
-      console.error("Not connected");
+    // Use ref instead of state to avoid stale closure (e.g. called from onPlaybackEnd callback)
+    if (!sessionConfigRef.current) {
+      console.error("Not connected (no session config)");
       return;
     }
 
@@ -509,7 +510,7 @@ export function useVoiceInteraction(options: UseVoiceInteractionOptions): UseVoi
       console.error("Failed to start listening:", error);
       throw error;
     }
-  }, [isConnected, capture, asr]);
+  }, [capture, asr]);
 
   // Stop listening
   const stopListening = useCallback(() => {
@@ -536,8 +537,8 @@ export function useVoiceInteraction(options: UseVoiceInteractionOptions): UseVoi
 
   // Send text message
   const sendTextMessage = useCallback((text: string) => {
-    if (!isConnected) {
-      console.error("Not connected");
+    if (!sessionConfigRef.current) {
+      console.error("Not connected (no session config)");
       return;
     }
 
@@ -546,7 +547,7 @@ export function useVoiceInteraction(options: UseVoiceInteractionOptions): UseVoi
 
     setState("thinking");
     llm.send(text);
-  }, [isConnected, llm]);
+  }, [llm]);
 
   // Update session config without reconnecting (for intervention mode optimization)
   // This allows changing the LLM systemPrompt/tools in-place, triggering

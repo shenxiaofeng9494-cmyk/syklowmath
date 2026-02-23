@@ -191,7 +191,7 @@ export function useDoubaoASR(options: UseDoubaoASROptions): UseDoubaoASRReturn {
       });
   }, [startPolling]);
 
-  // Send queued audio chunks as binary
+  // Send queued audio chunks as binary (batched to avoid sequential fetch bottleneck)
   const processAudioQueue = useCallback(async () => {
     if (sendingRef.current || audioQueueRef.current.length === 0) return;
     if (!sessionIdRef.current) return;
@@ -199,8 +199,15 @@ export function useDoubaoASR(options: UseDoubaoASROptions): UseDoubaoASRReturn {
     sendingRef.current = true;
 
     while (audioQueueRef.current.length > 0) {
-      const audioData = audioQueueRef.current.shift();
-      if (!audioData) break;
+      // Batch all queued chunks into a single request
+      const chunks = audioQueueRef.current.splice(0, audioQueueRef.current.length);
+      const totalSize = chunks.reduce((sum, c) => sum + c.byteLength, 0);
+      const combined = new Uint8Array(totalSize);
+      let offset = 0;
+      for (const chunk of chunks) {
+        combined.set(new Uint8Array(chunk), offset);
+        offset += chunk.byteLength;
+      }
 
       try {
         await fetch(ASR_PROXY_URL, {
@@ -210,7 +217,7 @@ export function useDoubaoASR(options: UseDoubaoASROptions): UseDoubaoASRReturn {
             "X-Session-Id": sessionIdRef.current!,
             "X-Is-Last": "false",
           },
-          body: audioData,
+          body: combined.buffer,
         });
       } catch (error) {
         console.error("Send audio error:", error);
