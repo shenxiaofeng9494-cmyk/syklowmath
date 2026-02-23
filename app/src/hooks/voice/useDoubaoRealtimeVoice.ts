@@ -612,8 +612,9 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
   }, []);
 
   const sendTextMessage = useCallback(async (text: string) => {
-    if (!isConnected || !sessionIdRef.current) {
-      console.error("Not connected");
+    // Use ref instead of state to avoid stale closure after connect() resolves
+    if (!sessionIdRef.current) {
+      console.error("Not connected (no session)");
       return;
     }
 
@@ -628,7 +629,7 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
         text,
       }),
     });
-  }, [isConnected]);
+  }, []);
 
   // Restore poll/heartbeat intervals if they were cleared (e.g. by HMR cleanup)
   // but the session is still alive
