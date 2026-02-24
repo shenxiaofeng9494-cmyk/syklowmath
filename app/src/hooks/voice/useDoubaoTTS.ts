@@ -7,15 +7,19 @@
  * Uses backend proxy for WebSocket connection since browser WebSocket
  * cannot set custom HTTP headers required by Doubao API.
  *
- * Protocol flow:
+ * Optimized protocol flow (v2 - SSE):
  * 1. Create session via POST /api/voice/tts (action: create)
- * 2. Send text via POST /api/voice/tts (action: speak)
- * 3. Poll for audio via POST /api/voice/tts (action: audio)
+ * 2. Subscribe to audio via SSE  GET /api/voice/tts/stream?sessionId=xxx
+ * 3. Send text via POST /api/voice/tts (action: speak)
  * 4. Cancel/close session when done
+ *
+ * Key improvement over v1:
+ * - SSE push replaces 200ms polling (eliminates ~200ms average latency per chunk)
+ * - Audio chunks arrive in real-time as Doubao generates them
  */
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import { TTS_PROXY_URL } from "./constants";
+import { TTS_PROXY_URL, TTS_STREAM_URL } from "./constants";
 import { base64ToArrayBuffer } from "./doubao-protocol";
 
 interface UseDoubaoTTSOptions {
@@ -43,11 +47,11 @@ export function useDoubaoTTS(options: UseDoubaoTTSOptions): UseDoubaoTTSReturn {
 
   const sessionIdRef = useRef<string | null>(null);
   const optionsRef = useRef(options);
+  const sseAbortRef = useRef<AbortController | null>(null);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const textQueueRef = useRef<string[]>([]);
   const isProcessingRef = useRef(false);
   const isSpeakingRef = useRef(false);
-  // Track if we've seen SESSION_STARTED for current speak request
   const hasSessionStartedRef = useRef(false);
 
   // Keep refs in sync
@@ -59,52 +63,25 @@ export function useDoubaoTTS(options: UseDoubaoTTSOptions): UseDoubaoTTSReturn {
     isSpeakingRef.current = isSpeaking;
   }, [isSpeaking]);
 
-  // Internal reconnect: create a fresh TTS session (used by processQueue when session is lost)
-  const reconnectInternal = useCallback(async (): Promise<boolean> => {
-    console.log("TTS reconnecting (session lost)...");
+  // Handle session finished event (shared between SSE and polling)
+  const handleSessionFinished = useCallback(() => {
+    console.log("TTS session finished");
+    isSpeakingRef.current = false;
+    setIsSpeaking(false);
+    isProcessingRef.current = false;
+    hasSessionStartedRef.current = false;
+    optionsRef.current.onSpeakEnd?.();
 
-    // Stop old polling
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current);
-      pollIntervalRef.current = null;
-    }
-    sessionIdRef.current = null;
-
-    try {
-      const response = await fetch(TTS_PROXY_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "create" }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Reconnect create failed: ${response.status}`);
-      }
-
-      const data = await response.json();
-      if (data.sessionId) {
-        sessionIdRef.current = data.sessionId;
-        setIsConnected(true);
-        // Start new polling (pollAudioRef used to avoid circular dep)
-        pollIntervalRef.current = setInterval(() => pollAudioRef.current(), 200);
-        console.log("TTS reconnected:", data.sessionId);
-        return true;
-      }
-      throw new Error("No session ID on reconnect");
-    } catch (error) {
-      console.error("TTS reconnect failed:", error);
-      setIsConnected(false);
-      return false;
-    }
+    // Process next item in queue (use setTimeout to avoid calling processQueue during render)
+    setTimeout(() => processQueueRef.current(), 0);
   }, []);
 
-  // Use ref for pollAudio to break circular dependency
-  const pollAudioRef = useRef<() => Promise<void>>(async () => {});
+  // Ref for processQueue to break circular dependency
+  const processQueueRef = useRef<() => void>(() => {});
 
-  // Poll for audio from backend
+  // Poll for audio from backend (fallback when SSE is unavailable)
   const pollAudio = useCallback(async () => {
     if (!sessionIdRef.current) return;
-    // Skip polling when not speaking (no data to fetch)
     if (!isSpeakingRef.current) return;
 
     try {
@@ -128,7 +105,6 @@ export function useDoubaoTTS(options: UseDoubaoTTSOptions): UseDoubaoTTSReturn {
         optionsRef.current.onError?.(new Error(data.error));
       }
 
-      // Process audio chunks
       if (data.audio && data.audio.length > 0) {
         for (const audioBase64 of data.audio) {
           const audioBuffer = base64ToArrayBuffer(audioBase64);
@@ -136,28 +112,16 @@ export function useDoubaoTTS(options: UseDoubaoTTSOptions): UseDoubaoTTSReturn {
         }
       }
 
-      // Track if session has started
       if (data.isSessionStarted) {
         hasSessionStartedRef.current = true;
       }
 
-      // Check if session finished (only if it has started first)
       if (hasSessionStartedRef.current && !data.isSessionStarted && isSpeakingRef.current) {
-        console.log("TTS session finished");
-        isSpeakingRef.current = false;
-        setIsSpeaking(false);
-        isProcessingRef.current = false;
-        hasSessionStartedRef.current = false;
-        optionsRef.current.onSpeakEnd?.();
-
-        // Process next item in queue
-        processQueue();
+        handleSessionFinished();
       }
 
       if (data.closed) {
         console.log("TTS connection closed by server (idle timeout)");
-        // Don't set isConnected=false here — allow processQueue to auto-reconnect
-        // Just clear the session and stop polling
         sessionIdRef.current = null;
         isSpeakingRef.current = false;
         setIsSpeaking(false);
@@ -169,26 +133,153 @@ export function useDoubaoTTS(options: UseDoubaoTTSOptions): UseDoubaoTTSReturn {
     } catch (error) {
       console.error("TTS poll error:", error);
     }
-  }, []);
+  }, [handleSessionFinished]);
 
-  // Keep pollAudioRef in sync
+  const pollAudioRef = useRef(pollAudio);
   useEffect(() => {
     pollAudioRef.current = pollAudio;
   }, [pollAudio]);
 
-  // Process text queue (with auto-reconnect on session loss)
-  // IMPORTANT: isProcessingRef is set at the TOP to prevent concurrent calls.
-  // Multiple queueText calls can arrive while reconnect is async — without this
-  // guard, each would start its own reconnect, creating orphaned TTS sessions.
+  const startPolling = useCallback((interval = 200) => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+    }
+    console.log("TTS: falling back to polling");
+    pollIntervalRef.current = setInterval(() => pollAudioRef.current(), interval);
+  }, []);
+
+  const stopPolling = useCallback(() => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+  }, []);
+
+  // Start SSE streaming for TTS audio (replaces polling)
+  const startSSE = useCallback((sessionId: string) => {
+    const abort = new AbortController();
+    sseAbortRef.current = abort;
+
+    const url = `${TTS_STREAM_URL}?sessionId=${encodeURIComponent(sessionId)}`;
+
+    fetch(url, { signal: abort.signal })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`TTS SSE connection failed: ${response.status}`);
+        }
+
+        console.log("TTS SSE connected");
+
+        const reader = response.body?.getReader();
+        if (!reader) {
+          throw new Error("No response body for SSE");
+        }
+
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+
+          // Parse SSE events from buffer
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              const dataStr = line.slice(6);
+
+              try {
+                const data = JSON.parse(dataStr);
+
+                if (data.error) {
+                  console.error("TTS SSE error:", data.error);
+                  optionsRef.current.onError?.(new Error(data.error));
+                } else if (data.event === "sessionStarted") {
+                  hasSessionStartedRef.current = true;
+                } else if (data.event === "sessionFinished") {
+                  if (isSpeakingRef.current) {
+                    handleSessionFinished();
+                  }
+                } else if (data.audio) {
+                  // Audio chunk received — push to playback immediately
+                  const audioBuffer = base64ToArrayBuffer(data.audio);
+                  optionsRef.current.onAudio?.(audioBuffer);
+                }
+              } catch {
+                // Ignore malformed JSON
+              }
+            } else if (line.startsWith("event: closed")) {
+              console.log("TTS session closed via SSE");
+              sessionIdRef.current = null;
+              isSpeakingRef.current = false;
+              setIsSpeaking(false);
+              return;
+            }
+          }
+        }
+
+        // Stream ended normally
+        console.log("TTS SSE stream ended");
+      })
+      .catch((err) => {
+        if (err.name === "AbortError") return;
+        console.warn("TTS SSE failed, falling back to polling:", err.message);
+        startPolling();
+      });
+  }, [handleSessionFinished, startPolling]);
+
+  // Internal reconnect
+  const reconnectInternal = useCallback(async (): Promise<boolean> => {
+    console.log("TTS reconnecting (session lost)...");
+
+    // Stop old SSE/polling
+    if (sseAbortRef.current) {
+      sseAbortRef.current.abort();
+      sseAbortRef.current = null;
+    }
+    stopPolling();
+    sessionIdRef.current = null;
+
+    try {
+      const response = await fetch(TTS_PROXY_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "create" }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Reconnect create failed: ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (data.sessionId) {
+        sessionIdRef.current = data.sessionId;
+        setIsConnected(true);
+        startSSE(data.sessionId);
+        console.log("TTS reconnected:", data.sessionId);
+        return true;
+      }
+      throw new Error("No session ID on reconnect");
+    } catch (error) {
+      console.error("TTS reconnect failed:", error);
+      setIsConnected(false);
+      return false;
+    }
+  }, [startSSE, stopPolling]);
+
+  // Process text queue
   const processQueue = useCallback(async () => {
     if (isProcessingRef.current || textQueueRef.current.length === 0) {
       return;
     }
 
-    // Lock immediately to prevent concurrent processQueue calls during async reconnect
     isProcessingRef.current = true;
 
-    // Auto-reconnect if session was lost (e.g., WebSocket idle timeout during intervention)
+    // Auto-reconnect if session was lost
     if (!sessionIdRef.current) {
       console.log("TTS session lost, auto-reconnecting before speak...");
       const ok = await reconnectInternal();
@@ -200,7 +291,7 @@ export function useDoubaoTTS(options: UseDoubaoTTSOptions): UseDoubaoTTSReturn {
       }
     }
 
-    hasSessionStartedRef.current = false;  // Reset for new speak request
+    hasSessionStartedRef.current = false;
 
     const text = textQueueRef.current.shift();
     if (!text) {
@@ -209,7 +300,6 @@ export function useDoubaoTTS(options: UseDoubaoTTSOptions): UseDoubaoTTSReturn {
     }
 
     try {
-      // Set ref immediately (before async) to ensure polling starts without 1-frame delay
       isSpeakingRef.current = true;
       setIsSpeaking(true);
       optionsRef.current.onSpeakStart?.();
@@ -228,7 +318,6 @@ export function useDoubaoTTS(options: UseDoubaoTTSOptions): UseDoubaoTTSReturn {
         const errorBody = await response.json().catch(() => ({}));
         const errorMsg = errorBody.error || `Speak failed: ${response.status}`;
 
-        // If session closed (410) or not found (404), try reconnect + retry once
         if (response.status === 410 || response.status === 404) {
           console.log("TTS session expired, reconnecting and retrying...");
           const ok = await reconnectInternal();
@@ -244,7 +333,7 @@ export function useDoubaoTTS(options: UseDoubaoTTSOptions): UseDoubaoTTSReturn {
             });
             if (retryResponse.ok) {
               console.log("TTS speak retry succeeded:", text.substring(0, 50));
-              return; // Success after retry
+              return;
             }
           }
         }
@@ -266,6 +355,11 @@ export function useDoubaoTTS(options: UseDoubaoTTSOptions): UseDoubaoTTSReturn {
       processQueue();
     }
   }, [reconnectInternal]);
+
+  // Keep processQueueRef in sync
+  useEffect(() => {
+    processQueueRef.current = processQueue;
+  }, [processQueue]);
 
   // Connect to TTS
   const connect = useCallback(async () => {
@@ -295,8 +389,8 @@ export function useDoubaoTTS(options: UseDoubaoTTSOptions): UseDoubaoTTSReturn {
         setIsConnected(true);
         optionsRef.current.onConnected?.();
 
-        // Start polling for audio (200ms interval, skips when not speaking)
-        pollIntervalRef.current = setInterval(() => pollAudioRef.current(), 200);
+        // Start SSE for real-time audio (replaces 200ms polling)
+        startSSE(data.sessionId);
 
         console.log("TTS session created:", data.sessionId);
       } else {
@@ -309,21 +403,18 @@ export function useDoubaoTTS(options: UseDoubaoTTSOptions): UseDoubaoTTSReturn {
       );
       throw error;
     }
-  }, []);
+  }, [startSSE]);
 
   // Speak text (clears queue and starts immediately)
   const speak = useCallback((text: string) => {
     if (!text.trim()) return;
 
-    // Clear queue
     textQueueRef.current = [];
 
-    // Cancel current if speaking
     if (isSpeakingRef.current) {
       cancel();
     }
 
-    // Queue and process
     textQueueRef.current.push(text);
     processQueue();
   }, [processQueue]);
@@ -334,7 +425,6 @@ export function useDoubaoTTS(options: UseDoubaoTTSOptions): UseDoubaoTTSReturn {
 
     textQueueRef.current.push(text);
 
-    // Start processing if not already
     if (!isProcessingRef.current) {
       processQueue();
     }
@@ -367,16 +457,18 @@ export function useDoubaoTTS(options: UseDoubaoTTSOptions): UseDoubaoTTSReturn {
 
   // Disconnect
   const disconnect = useCallback(async () => {
-    // Only log if there's a session to disconnect
     if (sessionIdRef.current) {
       console.log("Disconnecting TTS...");
     }
 
-    // Stop polling
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current);
-      pollIntervalRef.current = null;
+    // Stop SSE stream
+    if (sseAbortRef.current) {
+      sseAbortRef.current.abort();
+      sseAbortRef.current = null;
     }
+
+    // Stop polling fallback
+    stopPolling();
 
     // Close session on backend
     if (sessionIdRef.current) {
@@ -396,7 +488,6 @@ export function useDoubaoTTS(options: UseDoubaoTTSOptions): UseDoubaoTTSReturn {
       sessionIdRef.current = null;
     }
 
-    // Clear state
     textQueueRef.current = [];
     isProcessingRef.current = false;
 
@@ -404,11 +495,14 @@ export function useDoubaoTTS(options: UseDoubaoTTSOptions): UseDoubaoTTSReturn {
     setIsConnected(false);
     setIsSpeaking(false);
     optionsRef.current.onDisconnected?.();
-  }, []);
+  }, [stopPolling]);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
+      if (sseAbortRef.current) {
+        sseAbortRef.current.abort();
+      }
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
       }

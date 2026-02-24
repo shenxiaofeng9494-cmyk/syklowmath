@@ -12,6 +12,7 @@ import { getVideoById, SubtitleCue } from "@/data/videos";
 import { VoiceMode, VoiceBackend } from "@/types/drawing-script";
 import { useAdaptiveQuestions } from "@/hooks/useAdaptiveQuestions";
 import { useAuth } from "@/components/auth/AuthProvider";
+import { clearPersistedMessages } from "@/components/voice-interaction/VoiceInteraction";
 import type { LearningAnalysis } from "@/lib/agents/types";
 
 interface ClientVideo {
@@ -87,6 +88,11 @@ export default function WatchPage() {
     videoTitle: video?.title,
     onError: (error) => console.error('[AdaptiveQuestions] Error:', error),
   });
+
+  // 页面挂载时清空上一次对话记录（不影响全屏切换）
+  useEffect(() => {
+    clearPersistedMessages();
+  }, []);
 
   // 加载视频数据
   useEffect(() => {

@@ -104,6 +104,11 @@ interface Message {
 // Safe because there is only ever one VoiceInteraction instance at a time.
 let _persistedMessages: Message[] = [];
 
+/** Clear persisted messages — call on page mount (not fullscreen toggle) */
+export function clearPersistedMessages() {
+  _persistedMessages = [];
+}
+
 // 渲染包含 LaTeX 的文本
 function renderTextWithLatex(text: string): string {
   // 匹配 $...$ 或 $$...$$ 格式的 LaTeX
@@ -216,6 +221,16 @@ export function VoiceInteraction({
       return next;
     });
   }, []);
+  // 当 videoId 变化时清空对话历史（切换视频/重新进入页面）
+  const prevVideoIdRef = useRef(videoId);
+  useEffect(() => {
+    if (videoId !== prevVideoIdRef.current) {
+      prevVideoIdRef.current = videoId;
+      _persistedMessages = [];
+      setMessages([]);
+    }
+  }, [videoId, setMessages]);
+
   const [currentTranscript, setCurrentTranscript] = useState("");
   const [currentAnswer, setCurrentAnswer] = useState("");
   const [permissionError, setPermissionError] = useState<string>("");
