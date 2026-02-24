@@ -15,7 +15,10 @@ const QUICK_INTENTS = [
 ];
 
 export function QuickIntents({ currentSubtitle, onSelect }: QuickIntentsProps) {
-  const handleSelect = (intent: typeof QUICK_INTENTS[0]) => {
+  const handleSelect = (e: React.MouseEvent, intent: typeof QUICK_INTENTS[0]) => {
+    // 阻止事件冒泡到视频播放器（防止第一次点击暂停视频）
+    e.stopPropagation();
+    e.preventDefault();
     const prompt = intent.template.replace(
       "{subtitle}",
       currentSubtitle.slice(0, 30) || "刚才讲的内容"
@@ -33,7 +36,7 @@ export function QuickIntents({ currentSubtitle, onSelect }: QuickIntentsProps) {
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ delay: index * 0.05 }}
-            onClick={() => handleSelect(intent)}
+            onClick={(e) => handleSelect(e, intent)}
             className="px-4 py-2 bg-gray-700 hover:bg-blue-600 rounded-full
                        text-sm text-white flex items-center gap-2 transition-colors"
           >

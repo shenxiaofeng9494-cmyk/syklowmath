@@ -643,7 +643,7 @@ export function VoiceInteraction({
         setIsWakeWordMode(true);
         setStatus("listening");
         onResumeVideo();
-      }, 10000);
+      }, 5000);
     }
   };
 
@@ -784,32 +784,45 @@ export function VoiceInteraction({
     },
   });
 
-  // 点击按钮开始语音对话
-  const handleStartVoiceChat = useCallback(() => {
+  // 点击按钮开始语音对话（防重复点击）
+  const connectingRef = useRef(false);
+  const handleStartVoiceChat = useCallback(async () => {
+    // 防止重复点击
+    if (connectingRef.current) {
+      console.log("[VoiceChat] Already connecting, ignoring click");
+      return;
+    }
+    connectingRef.current = true;
+
     console.log("[VoiceChat] User clicked start, connecting Doubao S2S...");
     if (!isActive) {
       onToggle();
     }
+
+    // 先断开旧连接（如果有残留），确保单会话
+    await doubaoRealtimeVoice.disconnect();
+
     setIsWakeWordMode(false);
     onPauseVideo();
     setStatus("connecting");
     setConnectionError("");
 
-    doubaoRealtimeVoice.connect()
-      .then(async () => {
-        console.log("[VoiceChat] Doubao connected, starting audio capture...");
-        await doubaoRealtimeVoice.startListening();
-        setStatus("listening");
-        // AI 主动打招呼，让学生知道已连接成功（silent: 不在聊天中显示指令）
-        console.log("[VoiceChat] Sending greeting to trigger AI hello...");
-        doubaoRealtimeVoice.sendTextMessage("（简短打个招呼，不超过8个字）", { silent: true });
-      })
-      .catch((err) => {
-        console.error("[VoiceChat] Failed to connect Doubao:", err);
-        setConnectionError(err instanceof Error ? err.message : "连接失败");
-        setStatus("error");
-        setIsWakeWordMode(true);
-      });
+    try {
+      await doubaoRealtimeVoice.connect();
+      console.log("[VoiceChat] Doubao connected, starting audio capture...");
+      await doubaoRealtimeVoice.startListening();
+      setStatus("listening");
+      // AI 主动打招呼，让学生知道已连接成功（silent: 不在聊天中显示指令）
+      console.log("[VoiceChat] Sending greeting to trigger AI hello...");
+      doubaoRealtimeVoice.sendTextMessage("（简短打个招呼，不超过8个字）", { silent: true });
+    } catch (err) {
+      console.error("[VoiceChat] Failed to connect Doubao:", err);
+      setConnectionError(err instanceof Error ? err.message : "连接失败");
+      setStatus("error");
+      setIsWakeWordMode(true);
+    } finally {
+      connectingRef.current = false;
+    }
   }, [isActive, onToggle, onPauseVideo, doubaoRealtimeVoice]);
 
   // Select the appropriate voice hook based on backend mode
@@ -845,6 +858,14 @@ export function VoiceInteraction({
     const wasActive = prevIsActiveRef.current;
     prevIsActiveRef.current = isActive;
 
+    if (isActive && !wasActive) {
+      // 面板重新打开时清空历史对话
+      _persistedMessages = [];
+      setMessages([]);
+      currentAnswerRef.current = "";
+      setCurrentAnswer("");
+    }
+
     if (isActive) {
       // doubao_realtime 模式：所有连接都由用户触发（唤醒词、快捷意图、文本输入）
       if (voiceBackendRef.current === "doubao_realtime") {
@@ -879,11 +900,17 @@ export function VoiceInteraction({
         };
       }
     } else if (wasActive) {
-      // 从 active → inactive（用户退出通话）：断开当前连接，回到唤醒词模式
-      console.log("VoiceInteraction deactivated, disconnecting...");
+      // 从 active → inactive（用户退出通话）：断开所有连接，清空音频，回到唤醒词模式
+      console.log("VoiceInteraction deactivated, disconnecting all...");
       disconnectRef.current();
+      // 确保所有 backend 都断开（防止残留连接继续产生音频）
+      doubaoRealtimeDisconnectRef.current();
+      doubaoDisconnectRef.current();
+      // 清空介入 TTS 音频
+      interventionAudioPlayback.clear();
       setCurrentTranscript("");
       setCurrentAnswer("");
+      currentAnswerRef.current = "";
       setPendingWhiteboard(null);
       setPermissionError("");
       setConnectionError("");
@@ -891,6 +918,10 @@ export function VoiceInteraction({
       if (followupTimerRef.current) {
         clearTimeout(followupTimerRef.current);
         followupTimerRef.current = null;
+      }
+      if (interventionAnswerTimerRef.current) {
+        clearTimeout(interventionAnswerTimerRef.current);
+        interventionAnswerTimerRef.current = null;
       }
     }
   }, [isActive, isConnected]);
@@ -1242,12 +1273,13 @@ ${questionText}
     onPauseVideo();
 
     if (!isConnected && voiceBackend === "doubao_realtime") {
-      // 未连接时自动连接再发送
+      // 未连接时先断开残留连接，再重新连接发送
       console.log("[AutoConnect] Not connected, connecting before sending text...");
       setIsWakeWordMode(false);
       setStatus("connecting");
       setConnectionError("");
       try {
+        await doubaoRealtimeVoice.disconnect();
         await doubaoRealtimeVoice.connect();
         console.log("[AutoConnect] Connected, sending text message:", text);
         setStatus("thinking");
@@ -1325,24 +1357,7 @@ ${questionText}
           </div>
         )}
 
-        {/* 待机模式 — 点击按钮开始语音对话 */}
-        {isWakeWordMode && voiceBackend === "doubao_realtime" && (
-          <div className="text-center py-8">
-            <button
-              onClick={handleStartVoiceChat}
-              className="mx-auto flex items-center justify-center cursor-pointer"
-              title="点击开始语音对话"
-            >
-              <div className="w-16 h-16 rounded-full flex items-center justify-center transition-colors bg-[#333] hover:bg-[#444]">
-                <svg className="w-8 h-8 text-[#4ECDC4]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
-                </svg>
-              </div>
-            </button>
-            <p className="text-[#e8e8e8] text-base mb-1 mt-4">点击麦克风开始语音对话</p>
-            <p className="text-[#666] text-xs">AI老师随时准备回答你的问题</p>
-          </div>
-        )}
+        {/* 待机模式 — 点击按钮开始语音对话（放在消息列表下方） */}
 
         {/* 连接中 — 唤醒词模式下不显示（由唤醒词 UI 替代） */}
         {isActive && status === "connecting" && !isWakeWordMode && messages.length === 0 && (
@@ -1496,6 +1511,34 @@ ${questionText}
             onSelect={handleQuickIntent}
           />
         </div>
+
+        {/* 待机模式 — 语音对话按钮（底部） */}
+        {isWakeWordMode && voiceBackend === "doubao_realtime" && (
+          <div className="text-center py-4">
+            <button
+              onClick={handleStartVoiceChat}
+              disabled={status === "connecting"}
+              className="mx-auto flex items-center justify-center cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              title="点击开始语音对话"
+            >
+              <div className="w-16 h-16 rounded-full flex items-center justify-center transition-colors bg-[#333] hover:bg-[#444]">
+                {status === "connecting" ? (
+                  <div className="flex items-center gap-1">
+                    <div className="w-1.5 h-1.5 bg-[#4ECDC4] rounded-full animate-pulse" />
+                    <div className="w-1.5 h-1.5 bg-[#4ECDC4] rounded-full animate-pulse" style={{ animationDelay: "0.15s" }} />
+                    <div className="w-1.5 h-1.5 bg-[#4ECDC4] rounded-full animate-pulse" style={{ animationDelay: "0.3s" }} />
+                  </div>
+                ) : (
+                  <svg className="w-8 h-8 text-[#4ECDC4]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
+                  </svg>
+                )}
+              </div>
+            </button>
+            <p className="text-[#e8e8e8] text-base mb-1 mt-3">点击麦克风开始语音对话</p>
+            <p className="text-[#666] text-xs">AI老师随时准备回答你的问题</p>
+          </div>
+        )}
       </div>
 
       {/* 底部文字输入框 - 始终显示 */}
