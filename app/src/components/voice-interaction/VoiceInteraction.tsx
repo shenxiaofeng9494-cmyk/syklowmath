@@ -874,9 +874,7 @@ export function VoiceInteraction({
     prevIsActiveRef.current = isActive;
 
     if (isActive && !wasActive) {
-      // 面板重新打开时清空历史对话
-      _persistedMessages = [];
-      setMessages([]);
+      // 重新开启时仅重置进行中的回答，保留对话记录
       currentAnswerRef.current = "";
       setCurrentAnswer("");
     }

@@ -89,11 +89,6 @@ export default function WatchPage() {
     onError: (error) => console.error('[AdaptiveQuestions] Error:', error),
   });
 
-  // 页面挂载时清空上一次对话记录（不影响全屏切换）
-  useEffect(() => {
-    clearPersistedMessages();
-  }, []);
-
   // 加载视频数据
   useEffect(() => {
     if (!videoId) return;
@@ -523,6 +518,19 @@ export default function WatchPage() {
     return () => window.removeEventListener("beforeunload", handler);
   }, [isInConversation]);
 
+  // 阻止浏览器后退键 — 对话进行中时拦截 popstate，强制使用"退出通话"按钮
+  useEffect(() => {
+    if (!isInConversation) return;
+    // 推入一个哨兵 state，后退时会触发 popstate 而不是真正离开
+    window.history.pushState({ mathtalkConversation: true }, "");
+    const handler = () => {
+      // 再次推入 state，防止连续后退
+      window.history.pushState({ mathtalkConversation: true }, "");
+    };
+    window.addEventListener("popstate", handler);
+    return () => window.removeEventListener("popstate", handler);
+  }, [isInConversation]);
+
   // pagehide sendBeacon 兜底
   const hasUnsavedDataRef = useRef(hasUnsavedData);
   hasUnsavedDataRef.current = hasUnsavedData;
@@ -637,6 +645,9 @@ export default function WatchPage() {
   // 退出通话 - 立即弹出 loading 弹窗，后台提交学习数据
   const handleEndCall = useCallback(async () => {
     console.log('[V2] 退出对话，立即显示 loading 弹窗...');
+
+    // 0. 清空对话记录（只在退出通话时清空，全屏切换不清空）
+    clearPersistedMessages();
 
     // 1. 立即清理对话状态
     setIsInConversation(false);

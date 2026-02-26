@@ -312,11 +312,13 @@ export function useVoiceInteraction(options: UseVoiceInteractionOptions): UseVoi
       currentAnswerRef.current += text;
       optionsRef.current.onAnswer?.(text);
 
-      // Queue text for TTS
-      // Split by sentence to reduce latency
-      if (/[。？！，；,;]/.test(text)) {
-        console.log("[useVoiceInteraction] Queueing TTS for sentence, length:", currentAnswerRef.current.length);
-        tts.queueText(currentAnswerRef.current);
+      // Queue text for TTS — split by punctuation or character count for fast first-audio
+      const accumulated = currentAnswerRef.current;
+      const hasPunctuation = /[。？！，；,;：:、]/.test(text);
+      // Send to TTS when: punctuation found (natural break) OR accumulated >= 12 chars (reduce wait)
+      if (hasPunctuation || accumulated.length >= 12) {
+        console.log("[useVoiceInteraction] Queueing TTS, length:", accumulated.length, hasPunctuation ? "(punct)" : "(threshold)");
+        tts.queueText(accumulated);
         currentAnswerRef.current = "";
       }
     },
