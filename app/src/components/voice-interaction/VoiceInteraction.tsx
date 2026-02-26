@@ -249,6 +249,8 @@ export function VoiceInteraction({
   const followupTimerRef = useRef<NodeJS.Timeout | null>(null);
   // 介入模式：学生不回答的超时计时器（TTS 播完后 15 秒无回答则切回实时模式）
   const interventionAnswerTimerRef = useRef<NodeJS.Timeout | null>(null);
+  // 空格键静默计时器（5秒无语音自动关麦）
+  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const voiceBackendRef = useRef(voiceBackend);
   voiceBackendRef.current = voiceBackend;
 
@@ -549,14 +551,14 @@ export function VoiceInteraction({
       return;
     }
     console.log("AI triggered resume video");
-    // 在实时模式下，恢复视频意味着回到待机模式
+    // 在实时模式下，恢复视频意味着回到待机模式（stopListening 而非 disconnect，会话保活）
     if (voiceBackend === "doubao_realtime") {
-      console.log("[VoiceChat] Resume video → disconnecting Doubao, back to standby");
+      console.log("[VoiceChat] Resume video → stopListening, back to standby (session kept alive)");
       if (followupTimerRef.current) {
         clearTimeout(followupTimerRef.current);
         followupTimerRef.current = null;
       }
-      doubaoRealtimeVoice.disconnect();
+      doubaoRealtimeVoice.stopListening();
       setIsWakeWordMode(true);
       setStatus("listening");
     }
@@ -643,18 +645,18 @@ export function VoiceInteraction({
       return;
     }
 
-    // 在实时模式下，AI 回答完毕后开启 15 秒追问窗口
-    // 窗口内用户可以继续提问而不需要再说唤醒词
-    // 窗口过期后断开豆包、恢复视频、回到唤醒词监听模式
+    // 在实时模式下，AI 回答完毕后开启 5 秒静默窗口
+    // 窗口内用户可以继续提问（空格键或说话）
+    // 窗口过期后关麦、恢复视频、回到待机模式（会话保活，下次 startListening 即时响应）
     if (voiceBackend === "doubao_realtime" && !isWakeWordMode) {
       if (followupTimerRef.current) {
         clearTimeout(followupTimerRef.current);
       }
       followupTimerRef.current = setTimeout(() => {
-        console.log("[VoiceChat] Followup window expired, disconnecting Doubao, resuming video");
+        console.log("[VoiceChat] Followup window expired, stopping mic, resuming video (session kept alive)");
         followupTimerRef.current = null;
-        postInterventionChatRef.current = false;  // 追问窗口过期，清除追问模式
-        doubaoRealtimeVoice.disconnect();
+        postInterventionChatRef.current = false;
+        doubaoRealtimeVoice.stopListening();
         setIsWakeWordMode(true);
         setStatus("listening");
         onResumeVideo();
@@ -799,7 +801,7 @@ export function VoiceInteraction({
     },
   });
 
-  // 点击按钮开始语音对话（防重复点击）
+  // 点击按钮 / 空格键开始语音对话（防重复点击）
   const connectingRef = useRef(false);
   const handleStartVoiceChat = useCallback(async () => {
     // 防止重复点击
@@ -809,29 +811,34 @@ export function VoiceInteraction({
     }
     connectingRef.current = true;
 
-    console.log("[VoiceChat] User clicked start, connecting Doubao S2S...");
+    console.log("[VoiceChat] User activated mic");
     if (!isActive) {
       onToggle();
     }
 
-    // 先断开旧连接（如果有残留），确保单会话
-    await doubaoRealtimeVoice.disconnect();
-
     setIsWakeWordMode(false);
     onPauseVideo();
-    setStatus("connecting");
     setConnectionError("");
 
     try {
-      await doubaoRealtimeVoice.connect();
-      console.log("[VoiceChat] Doubao connected, starting audio capture...");
-      await doubaoRealtimeVoice.startListening();
-      setStatus("listening");
-      // AI 主动打招呼，让学生知道已连接成功（silent: 不在聊天中显示指令）
-      console.log("[VoiceChat] Sending greeting to trigger AI hello...");
-      doubaoRealtimeVoice.sendTextMessage("（简短打个招呼，不超过8个字）", { silent: true });
+      // 如果已预连接，直接 startListening（~100ms）；否则需要 connect（~1-2s）
+      if (doubaoRealtimeVoice.isConnected) {
+        console.log("[VoiceChat] Session already connected (preConnect), starting mic instantly...");
+        await doubaoRealtimeVoice.startListening();
+        setStatus("listening");
+      } else {
+        console.log("[VoiceChat] No session yet, connecting Doubao S2S...");
+        setStatus("connecting");
+        await doubaoRealtimeVoice.connect();
+        console.log("[VoiceChat] Doubao connected, starting audio capture...");
+        await doubaoRealtimeVoice.startListening();
+        setStatus("listening");
+        // AI 主动打招呼，让学生知道已连接成功（silent: 不在聊天中显示指令）
+        console.log("[VoiceChat] Sending greeting to trigger AI hello...");
+        doubaoRealtimeVoice.sendTextMessage("（简短打个招呼，不超过8个字）", { silent: true });
+      }
     } catch (err) {
-      console.error("[VoiceChat] Failed to connect Doubao:", err);
+      console.error("[VoiceChat] Failed to start voice chat:", err);
       setConnectionError(err instanceof Error ? err.message : "连接失败");
       setStatus("error");
       setIsWakeWordMode(true);
@@ -880,11 +887,16 @@ export function VoiceInteraction({
     }
 
     if (isActive) {
-      // doubao_realtime 模式：所有连接都由用户触发（唤醒词、快捷意图、文本输入）
+      // doubao_realtime 模式：后台预连接，用户触发时只需 startListening（~100ms）
       if (voiceBackendRef.current === "doubao_realtime") {
         // 确保 status 不卡在 connecting
         if (statusRef.current === "connecting") {
           setStatus("listening");
+        }
+        // 后台预连接（用户无感）：创建 Doubao S2S 会话 + 心跳保活
+        if (!isConnected) {
+          console.log("[VoiceChat] Pre-connecting Doubao S2S in background...");
+          doubaoRealtimePreConnectRef.current();
         }
         return;
       }
@@ -936,6 +948,11 @@ export function VoiceInteraction({
         clearTimeout(interventionAnswerTimerRef.current);
         interventionAnswerTimerRef.current = null;
       }
+      // 清除空格键静默计时器
+      if (silenceTimerRef.current) {
+        clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = null;
+      }
     }
   }, [isActive, isConnected]);
 
@@ -981,14 +998,16 @@ export function VoiceInteraction({
   const doubaoDisconnectRef = useRef(voiceInteraction.disconnect);
   const doubaoRealtimeDisconnectRef = useRef(doubaoRealtimeVoice.disconnect);
   const doubaoRealtimeConnectRef = useRef(doubaoRealtimeVoice.connect);
+  const doubaoRealtimePreConnectRef = useRef(doubaoRealtimeVoice.preConnect);
   const doubaoRealtimeStartListeningRef = useRef(doubaoRealtimeVoice.startListening);
   useEffect(() => {
     realtimeDisconnectRef.current = realtimeVoice.disconnect;
     doubaoDisconnectRef.current = voiceInteraction.disconnect;
     doubaoRealtimeDisconnectRef.current = doubaoRealtimeVoice.disconnect;
     doubaoRealtimeConnectRef.current = doubaoRealtimeVoice.connect;
+    doubaoRealtimePreConnectRef.current = doubaoRealtimeVoice.preConnect;
     doubaoRealtimeStartListeningRef.current = doubaoRealtimeVoice.startListening;
-  }, [realtimeVoice.disconnect, voiceInteraction.disconnect, doubaoRealtimeVoice.disconnect, doubaoRealtimeVoice.connect, doubaoRealtimeVoice.startListening]);
+  }, [realtimeVoice.disconnect, voiceInteraction.disconnect, doubaoRealtimeVoice.disconnect, doubaoRealtimeVoice.connect, doubaoRealtimeVoice.preConnect, doubaoRealtimeVoice.startListening]);
 
   // 介入验证后自动连接 realtime 的标记
   const postInterventionAutoConnectRef = useRef(false);
@@ -1089,20 +1108,20 @@ export function VoiceInteraction({
     }
   }, [voiceBackend, isActive]);
 
-  // 视频播放时自动断连 realtime 并回到待机模式
+  // 视频播放时自动关麦并回到待机模式（会话保活）
   useEffect(() => {
     if (isVideoPlaying && voiceBackendRef.current === "doubao_realtime" && !isWakeWordMode) {
-      console.log("[VoiceChat] Video started playing, disconnecting realtime → standby");
+      console.log("[VoiceChat] Video started playing, stopping mic → standby (session kept alive)");
       postInterventionChatRef.current = false;  // 用户手动点播放，清除追问模式
       if (followupTimerRef.current) {
         clearTimeout(followupTimerRef.current);
         followupTimerRef.current = null;
       }
-      doubaoRealtimeDisconnectRef.current();
+      doubaoRealtimeVoice.stopListening();
       setIsWakeWordMode(true);
       setStatus("listening");
     }
-  }, [isVideoPlaying, isWakeWordMode]);
+  }, [isVideoPlaying, isWakeWordMode, doubaoRealtimeVoice]);
 
   // 监听介入配置变化，重新初始化会话并播放介入问题
   // 使用 ref 来追踪当前正在处理的介入配置ID
@@ -1211,6 +1230,133 @@ ${questionText}
     }
   }, [isListening]);
 
+  // === 空格键混合控制 ===
+  // 短按 (<500ms): 切换麦克风开/关
+  // 长按 (>=500ms): 按住说话，松开关闭
+  const spaceDownTimeRef = useRef<number>(0);
+  const spaceIsHeldRef = useRef(false);
+
+  // 5秒静默自动关麦
+  const startSilenceTimer = useCallback(() => {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+    }
+    silenceTimerRef.current = setTimeout(() => {
+      console.log("[Spacebar] 5s silence timeout, auto-closing mic");
+      silenceTimerRef.current = null;
+      if (voiceBackendRef.current === "doubao_realtime" && !isWakeWordMode) {
+        doubaoRealtimeVoice.stopListening();
+        setIsWakeWordMode(true);
+        setStatus("listening");
+        onResumeVideo();
+      }
+    }, 5000);
+  }, [isWakeWordMode, doubaoRealtimeVoice, onResumeVideo]);
+
+  const clearSilenceTimer = useCallback(() => {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+  }, []);
+
+  // 空格键开启麦克风（统一逻辑）
+  const activateMic = useCallback(async () => {
+    clearSilenceTimer();
+    if (followupTimerRef.current) {
+      clearTimeout(followupTimerRef.current);
+      followupTimerRef.current = null;
+    }
+    if (isWakeWordMode) {
+      // 从待机模式激活
+      await handleStartVoiceChat();
+    } else if (!doubaoRealtimeVoice.isListening) {
+      // 已连接但麦克风关闭，重新开启
+      onPauseVideo();
+      await doubaoRealtimeVoice.startListening();
+      setStatus("listening");
+    }
+  }, [isWakeWordMode, handleStartVoiceChat, doubaoRealtimeVoice, onPauseVideo, clearSilenceTimer]);
+
+  // 空格键关闭麦克风
+  const deactivateMic = useCallback(() => {
+    if (doubaoRealtimeVoice.isListening) {
+      doubaoRealtimeVoice.stopListening();
+      setIsWakeWordMode(true);
+      setStatus("listening");
+      onResumeVideo();
+    }
+    clearSilenceTimer();
+  }, [doubaoRealtimeVoice, onResumeVideo, clearSilenceTimer]);
+
+  useEffect(() => {
+    if (!isActive || voiceBackend !== "doubao_realtime") return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // 不响应：文本输入框 focused、重复按键、介入模式
+      if (e.code !== "Space") return;
+      if (e.repeat) return;
+      if (interventionConfig) return;
+      const target = e.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
+
+      e.preventDefault();
+      spaceDownTimeRef.current = Date.now();
+      spaceIsHeldRef.current = false;
+
+      // 长按检测：500ms 后标记为长按并激活麦克风
+      setTimeout(() => {
+        if (spaceDownTimeRef.current > 0) {
+          spaceIsHeldRef.current = true;
+          console.log("[Spacebar] Long press detected, activating mic (PTT)");
+          activateMic();
+        }
+      }, 500);
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return;
+      if (interventionConfig) return;
+      const target = e.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
+
+      e.preventDefault();
+      const duration = Date.now() - spaceDownTimeRef.current;
+      spaceDownTimeRef.current = 0;
+
+      if (spaceIsHeldRef.current) {
+        // 长按松开 → 关闭麦克风
+        console.log("[Spacebar] Long press released, deactivating mic");
+        spaceIsHeldRef.current = false;
+        deactivateMic();
+      } else if (duration < 500) {
+        // 短按 → 切换麦克风
+        if (isWakeWordMode || !doubaoRealtimeVoice.isListening) {
+          console.log("[Spacebar] Short press → activate mic");
+          activateMic();
+        } else {
+          console.log("[Spacebar] Short press → deactivate mic");
+          deactivateMic();
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+      spaceDownTimeRef.current = 0;
+      spaceIsHeldRef.current = false;
+    };
+  }, [isActive, voiceBackend, isWakeWordMode, interventionConfig, doubaoRealtimeVoice, activateMic, deactivateMic]);
+
+  // ASR_ENDED 后启动 5 秒静默计时器（通过 onSpeechEnd 回调触发）
+  // handleSpeechEnd 已在上面定义，我们在 handleComplete 的 followup timer 已处理
+  // 额外：当用户说完话但 AI 还没回复时，也需要 5s 静默保护
+  // 这由 followup timer 在 handleComplete 中处理
+
   // 通知父组件麦克风状态变化
   useEffect(() => {
     onMicStatusChange?.(isListening);
@@ -1286,13 +1432,12 @@ ${questionText}
     onPauseVideo();
 
     if (!isConnected && voiceBackend === "doubao_realtime") {
-      // 未连接时先断开残留连接，再重新连接发送
+      // 未连接时先连接再发送
       console.log("[AutoConnect] Not connected, connecting before sending text...");
       setIsWakeWordMode(false);
       setStatus("connecting");
       setConnectionError("");
       try {
-        await doubaoRealtimeVoice.disconnect();
         await doubaoRealtimeVoice.connect();
         console.log("[AutoConnect] Connected, sending text message:", text);
         setStatus("thinking");
@@ -1548,8 +1693,8 @@ ${questionText}
                 )}
               </div>
             </button>
-            <p className="text-[#e8e8e8] text-base mb-1 mt-3">点击麦克风开始语音对话</p>
-            <p className="text-[#666] text-xs">AI老师随时准备回答你的问题</p>
+            <p className="text-[#e8e8e8] text-base mb-1 mt-3">点击麦克风或按空格键开始</p>
+            <p className="text-[#666] text-xs">短按切换 · 长按说话 · 5秒静默自动关</p>
           </div>
         )}
       </div>

@@ -4,8 +4,9 @@
  * useDoubaoRealtimeVoice Hook
  *
  * Connects to Doubao Realtime (S2S) via backend proxy.
- * Uses polling to fetch events and audio, and streams microphone audio.
+ * Uses SSE for event streaming (with polling fallback), and streams microphone audio.
  * Supports Function Calling for tool invocations.
+ * Supports preConnect() for background session creation to eliminate connection delay.
  */
 
 import { useState, useCallback, useRef, useEffect } from "react";
@@ -61,14 +62,15 @@ interface SessionConfig {
   nodeList: VideoNode[];
 }
 
-interface UseDoubaoRealtimeVoiceReturn {
+export interface UseDoubaoRealtimeVoiceReturn {
   isConnected: boolean;
   isListening: boolean;
   connect: () => Promise<void>;
   disconnect: () => void;
+  preConnect: () => Promise<void>;
   startListening: () => Promise<void>;
   stopListening: () => void;
-  sendTextMessage: (text: string) => void;
+  sendTextMessage: (text: string, options?: { silent?: boolean }) => void;
 }
 
 export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): UseDoubaoRealtimeVoiceReturn {
@@ -79,15 +81,16 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
   const optionsRef = useRef(options);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const heartbeatIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const sseSourceRef = useRef<EventSource | null>(null);
+  const usingSSERef = useRef(false); // Whether SSE is active (vs polling fallback)
   const audioQueueRef = useRef<ArrayBuffer[]>([]);
   const sendingRef = useRef(false);
   const currentAnswerRef = useRef("");
   const currentUserMessageRef = useRef("");
-  const pollErrorCountRef = useRef(0); // Track consecutive poll errors for auto-reconnect
+  const pollErrorCountRef = useRef(0);
   const sessionConfigRef = useRef<SessionConfig | null>(null);
-  const toolDetectionTriggeredRef = useRef(false); // Prevent duplicate detection
-  const disconnectingRef = useRef(false); // Prevent audio enqueue during disconnect
-  const lastAudioSentTimeRef = useRef<number>(0); // Track last audio sent time for heartbeat
+  const disconnectingRef = useRef(false);
+  const lastAudioSentTimeRef = useRef<number>(0);
 
   useEffect(() => {
     optionsRef.current = options;
@@ -219,101 +222,198 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
     await sendFunctionResult(callId, "success");
   }, [sendFunctionResult]);
 
-  const processEvents = useCallback((events: RealtimeEvent[]) => {
-    for (const event of events) {
-      // Debug: log all events
-      console.log("Doubao Realtime event:", event.eventId, event.payload);
+  // Process a single event from Doubao
+  const processSingleEvent = useCallback((event: RealtimeEvent) => {
+    // Debug: log all events
+    console.log("Doubao Realtime event:", event.eventId, event.payload);
 
-      switch (event.eventId) {
-        case EVENTS.ASR_INFO: {
-          // User started speaking
-          optionsRef.current.onSpeechStart?.();
-          break;
-        }
-        case EVENTS.ASR_RESPONSE: {
-          const results = (event.payload?.results as Array<{ text: string; is_interim: boolean }> | undefined) || [];
-          for (const result of results) {
-            // Resume keyword detection (quick shortcut without waiting for AI)
-            if (!result.is_interim && result.text && isResumeCommand(result.text)) {
-              console.log('[Realtime] Resume command detected:', result.text);
-              optionsRef.current.onTranscript?.(result.text, true);
-              optionsRef.current.onResumeVideo?.();
-              continue;
-            }
-            // Forward transcript directly (no gating)
-            optionsRef.current.onTranscript?.(result.text, !result.is_interim);
-            if (!result.is_interim && result.text) {
-              currentUserMessageRef.current = result.text;
-            }
-          }
-          break;
-        }
-        case EVENTS.ASR_ENDED: {
-          optionsRef.current.onSpeechEnd?.();
-          break;
-        }
-        case EVENTS.CHAT_RESPONSE: {
-          const content = String(event.payload?.content || "");
-          if (content) {
-            currentAnswerRef.current += content;
-            optionsRef.current.onAnswer?.(content);
-          }
-          break;
-        }
-        case EVENTS.FUNCTION_CALL: {
-          // Handle function call from Doubao
-          const toolCalls = event.payload?.tool_calls as Array<{
-            id: string;
-            function: { name: string; arguments: string };
-          }> | undefined;
-
-          if (toolCalls) {
-            for (const call of toolCalls) {
-              try {
-                const args = JSON.parse(call.function.arguments);
-                handleToolCall(call.function.name, args, call.id);
-              } catch (e) {
-                console.error("Failed to parse function arguments:", e);
-              }
-            }
-          }
-          break;
-        }
-        case EVENTS.CHAT_ENDED: {
-          if (currentAnswerRef.current) {
-            const answer = currentAnswerRef.current;
-            const userMessage = currentUserMessageRef.current;
-
-            // Use Doubao Chat to detect tool calls, then complete the answer
-            detectAndExecuteTools(answer, userMessage).then(() => {
-              optionsRef.current.onAnswerComplete?.(answer);
-              optionsRef.current.onComplete?.();
-            });
-
-            currentAnswerRef.current = "";
-            currentUserMessageRef.current = "";
-          } else {
-            optionsRef.current.onComplete?.();
-          }
-          break;
-        }
-        case EVENTS.TTS_RESPONSE: {
-          // Skip audio if disconnecting
-          if (event.audioBase64 && !disconnectingRef.current) {
-            const audioBuffer = Uint8Array.from(atob(event.audioBase64), (c) => c.charCodeAt(0)).buffer;
-            playback.enqueue(audioBuffer);
-          }
-          break;
-        }
-        case EVENTS.TTS_ENDED: {
-          break;
-        }
-        default:
-          break;
+    switch (event.eventId) {
+      case EVENTS.ASR_INFO: {
+        // User started speaking
+        optionsRef.current.onSpeechStart?.();
+        break;
       }
+      case EVENTS.ASR_RESPONSE: {
+        const results = (event.payload?.results as Array<{ text: string; is_interim: boolean }> | undefined) || [];
+        for (const result of results) {
+          // Resume keyword detection (quick shortcut without waiting for AI)
+          if (!result.is_interim && result.text && isResumeCommand(result.text)) {
+            console.log('[Realtime] Resume command detected:', result.text);
+            optionsRef.current.onTranscript?.(result.text, true);
+            optionsRef.current.onResumeVideo?.();
+            continue;
+          }
+          // Forward transcript directly (no gating)
+          optionsRef.current.onTranscript?.(result.text, !result.is_interim);
+          if (!result.is_interim && result.text) {
+            currentUserMessageRef.current = result.text;
+          }
+        }
+        break;
+      }
+      case EVENTS.ASR_ENDED: {
+        optionsRef.current.onSpeechEnd?.();
+        break;
+      }
+      case EVENTS.CHAT_RESPONSE: {
+        const content = String(event.payload?.content || "");
+        if (content) {
+          currentAnswerRef.current += content;
+          optionsRef.current.onAnswer?.(content);
+        }
+        break;
+      }
+      case EVENTS.FUNCTION_CALL: {
+        // Handle function call from Doubao
+        const toolCalls = event.payload?.tool_calls as Array<{
+          id: string;
+          function: { name: string; arguments: string };
+        }> | undefined;
+
+        if (toolCalls) {
+          for (const call of toolCalls) {
+            try {
+              const args = JSON.parse(call.function.arguments);
+              handleToolCall(call.function.name, args, call.id);
+            } catch (e) {
+              console.error("Failed to parse function arguments:", e);
+            }
+          }
+        }
+        break;
+      }
+      case EVENTS.CHAT_ENDED: {
+        if (currentAnswerRef.current) {
+          const answer = currentAnswerRef.current;
+          const userMessage = currentUserMessageRef.current;
+
+          // Use Doubao Chat to detect tool calls, then complete the answer
+          detectAndExecuteTools(answer, userMessage).then(() => {
+            optionsRef.current.onAnswerComplete?.(answer);
+            optionsRef.current.onComplete?.();
+          });
+
+          currentAnswerRef.current = "";
+          currentUserMessageRef.current = "";
+        } else {
+          optionsRef.current.onComplete?.();
+        }
+        break;
+      }
+      case EVENTS.TTS_RESPONSE: {
+        // Skip audio if disconnecting
+        if (event.audioBase64 && !disconnectingRef.current) {
+          const audioBuffer = Uint8Array.from(atob(event.audioBase64), (c) => c.charCodeAt(0)).buffer;
+          playback.enqueue(audioBuffer);
+        }
+        break;
+      }
+      case EVENTS.TTS_ENDED: {
+        break;
+      }
+      default:
+        break;
     }
   }, [playback, handleToolCall, detectAndExecuteTools]);
 
+  // Batch process events (for polling fallback)
+  const processEvents = useCallback((events: RealtimeEvent[]) => {
+    for (const event of events) {
+      processSingleEvent(event);
+    }
+  }, [processSingleEvent]);
+
+  // Handle session death (cleanup for auto-reconnect)
+  const handleSessionDeath = useCallback((reason: string) => {
+    console.warn(`[Realtime] Session dead (${reason}), cleaning up for auto-reconnect`);
+    sessionIdRef.current = null;
+    audioQueueRef.current = [];
+    sendingRef.current = false;
+
+    // Close SSE
+    if (sseSourceRef.current) {
+      sseSourceRef.current.close();
+      sseSourceRef.current = null;
+      usingSSERef.current = false;
+    }
+
+    // Clear polling
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+    if (heartbeatIntervalRef.current) {
+      clearInterval(heartbeatIntervalRef.current);
+      heartbeatIntervalRef.current = null;
+    }
+
+    setIsConnected(false);
+    setIsListening(false);
+  }, []);
+
+  // Start SSE event stream for a session
+  const startSSE = useCallback((sessionId: string) => {
+    // Close existing SSE if any
+    if (sseSourceRef.current) {
+      sseSourceRef.current.close();
+      sseSourceRef.current = null;
+    }
+
+    try {
+      const source = new EventSource(`${REALTIME_PROXY_URL}?sessionId=${sessionId}`);
+      sseSourceRef.current = source;
+
+      source.onopen = () => {
+        console.log("[SSE] Connected for session:", sessionId);
+        usingSSERef.current = true;
+
+        // Stop polling since SSE is working
+        if (pollIntervalRef.current) {
+          console.log("[SSE] Stopping polling fallback");
+          clearInterval(pollIntervalRef.current);
+          pollIntervalRef.current = null;
+        }
+      };
+
+      source.onmessage = (e) => {
+        try {
+          const event = JSON.parse(e.data) as RealtimeEvent;
+          processSingleEvent(event);
+        } catch (err) {
+          console.error("[SSE] Failed to parse event:", err);
+        }
+      };
+
+      source.addEventListener("error", (e) => {
+        console.error("[SSE] Error:", e);
+        // SSE disconnected — fall back to polling if session is still alive
+        if (sessionIdRef.current && !disconnectingRef.current) {
+          console.log("[SSE] Falling back to polling");
+          usingSSERef.current = false;
+          source.close();
+          sseSourceRef.current = null;
+
+          if (!pollIntervalRef.current) {
+            pollIntervalRef.current = setInterval(pollEvents, 200);
+          }
+        }
+      });
+
+      source.addEventListener("close", () => {
+        console.log("[SSE] Server closed the stream");
+        if (sessionIdRef.current && !disconnectingRef.current) {
+          handleSessionDeath("SSE close event");
+        }
+      });
+
+      return true;
+    } catch (err) {
+      console.error("[SSE] Failed to create EventSource:", err);
+      return false;
+    }
+  }, [processSingleEvent, handleSessionDeath]);
+
+  // Polling fallback (used when SSE fails)
   const pollEvents = useCallback(async () => {
     if (!sessionIdRef.current) return;
 
@@ -332,9 +432,8 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
       }
 
       const data = await response.json();
-      pollErrorCountRef.current = 0; // Reset error counter on success
+      pollErrorCountRef.current = 0;
 
-      // Check for fatal session errors (e.g. DialogAudioIdleTimeoutError)
       const isFatalError = data.error && (
         typeof data.error === 'string'
           ? data.error.includes('TimeoutError') || data.error.includes('SessionExpired') || data.error.includes('SessionClosed')
@@ -354,46 +453,17 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
       }
 
       if (data.closed || isFatalError) {
-        console.warn(`[Realtime] Session dead (closed=${data.closed}, fatalError=${isFatalError}), cleaning up for auto-reconnect`);
-        // Clear ALL state so connect() can create a fresh session
-        sessionIdRef.current = null;
-        audioQueueRef.current = [];
-        sendingRef.current = false;
-        if (pollIntervalRef.current) {
-          clearInterval(pollIntervalRef.current);
-          pollIntervalRef.current = null;
-        }
-        if (heartbeatIntervalRef.current) {
-          clearInterval(heartbeatIntervalRef.current);
-          heartbeatIntervalRef.current = null;
-        }
-        // Setting isConnected=false triggers auto-reconnect via VoiceInteraction's isActive effect
-        setIsConnected(false);
-        setIsListening(false);
+        handleSessionDeath(`closed=${data.closed}, fatalError=${isFatalError}`);
       }
     } catch (error) {
       console.error("Realtime poll error:", error);
       pollErrorCountRef.current++;
-      // After 5 consecutive poll errors, assume session is dead and clean up
       if (pollErrorCountRef.current >= 5) {
-        console.warn(`[Realtime] ${pollErrorCountRef.current} consecutive poll errors, session likely dead. Cleaning up.`);
-        sessionIdRef.current = null;
-        audioQueueRef.current = [];
-        sendingRef.current = false;
-        if (pollIntervalRef.current) {
-          clearInterval(pollIntervalRef.current);
-          pollIntervalRef.current = null;
-        }
-        if (heartbeatIntervalRef.current) {
-          clearInterval(heartbeatIntervalRef.current);
-          heartbeatIntervalRef.current = null;
-        }
         pollErrorCountRef.current = 0;
-        setIsConnected(false);
-        setIsListening(false);
+        handleSessionDeath(`${pollErrorCountRef.current} consecutive poll errors`);
       }
     }
-  }, [processEvents]);
+  }, [processEvents, handleSessionDeath]);
 
   // Track audio sends for debug logging
   const audioSendCountRef = useRef(0);
@@ -405,8 +475,7 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
     sendingRef.current = true;
 
     while (audioQueueRef.current.length > 0) {
-      // Batch all queued chunks into a single request to avoid
-      // HTTP round-trip bottleneck (10 chunks/s vs ~3 fetches/s)
+      // Batch all queued chunks into a single request
       const chunks = audioQueueRef.current.splice(0, audioQueueRef.current.length);
       const totalSize = chunks.reduce((sum, c) => sum + c.byteLength, 0);
       const combined = new Uint8Array(totalSize);
@@ -447,7 +516,6 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
     // Only send heartbeat if no audio was sent recently
     const timeSinceLastAudio = Date.now() - lastAudioSentTimeRef.current;
     if (timeSinceLastAudio < HEARTBEAT_INTERVAL_MS - 5000) {
-      // Audio was sent recently, skip heartbeat
       return;
     }
 
@@ -476,13 +544,9 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
   const capture = useAudioCapture({
     onAudioChunk: (chunk) => {
       audioChunkCountRef.current++;
-      // Log every 50th chunk (~5 seconds of audio) to confirm pipeline is active
       if (audioChunkCountRef.current % 50 === 1) {
         console.log(`[AudioPipeline] chunk #${audioChunkCountRef.current}, size=${chunk.byteLength}, session=${!!sessionIdRef.current}, disconnecting=${disconnectingRef.current}`);
       }
-      // Use refs instead of state to avoid stale closure — state values
-      // (isListening, isConnected) get captured at render time and don't
-      // update when the AudioWorklet fires callbacks between renders.
       if (!sessionIdRef.current || disconnectingRef.current) return;
       audioQueueRef.current.push(chunk);
       processAudioQueue();
@@ -500,21 +564,8 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
     captureStopRef.current = capture.stop;
   }, [capture.start, capture.stop]);
 
-  const connect = useCallback(async () => {
-    if (sessionIdRef.current) {
-      // Session already exists (e.g. React Strict Mode second mount)
-      // Ensure connected state and intervals are properly set up
-      console.log('[Realtime] Session already exists, restoring state:', sessionIdRef.current);
-      setIsConnected(true);
-      if (!pollIntervalRef.current) {
-        pollIntervalRef.current = setInterval(pollEvents, 200);
-      }
-      if (!heartbeatIntervalRef.current) {
-        heartbeatIntervalRef.current = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
-      }
-      return;
-    }
-
+  // Core session creation logic (shared by connect and preConnect)
+  const createSession = useCallback(async (): Promise<string> => {
     const sessionResp = await fetch("/api/voice/session", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -522,9 +573,9 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
         videoContext: optionsRef.current.videoContext,
         videoId: optionsRef.current.videoId,
         currentTime: optionsRef.current.currentTime,
-        studentId: optionsRef.current.studentId, // V2 自适应：传递学生ID获取画像
-        learningSessionId: optionsRef.current.learningSessionId, // 跨模式上下文共享
-        backend: "doubao_realtime", // Specify backend for Doubao Realtime S2S
+        studentId: optionsRef.current.studentId,
+        learningSessionId: optionsRef.current.learningSessionId,
+        backend: "doubao_realtime",
       }),
     });
 
@@ -559,18 +610,76 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
 
     const data = await response.json();
 
-    if (data.sessionId) {
-      sessionIdRef.current = data.sessionId;
-      setIsConnected(true);
-      lastAudioSentTimeRef.current = Date.now(); // Initialize last audio time
-      pollIntervalRef.current = setInterval(pollEvents, 200);
-      // Start heartbeat to prevent DialogAudioIdleTimeoutError
-      heartbeatIntervalRef.current = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
-      console.log("Started heartbeat interval to keep connection alive");
-    } else {
+    if (!data.sessionId) {
       throw new Error("No session ID returned");
     }
-  }, [pollEvents, sendHeartbeat]);
+
+    return data.sessionId;
+  }, []);
+
+  // Start event listening (SSE with polling fallback) + heartbeat
+  const startEventListening = useCallback((sessionId: string) => {
+    // Try SSE first
+    const sseStarted = startSSE(sessionId);
+
+    // Also start polling as immediate fallback (will be stopped if SSE connects)
+    if (!pollIntervalRef.current) {
+      pollIntervalRef.current = setInterval(pollEvents, 200);
+    }
+
+    // Start heartbeat to prevent DialogAudioIdleTimeoutError
+    if (!heartbeatIntervalRef.current) {
+      heartbeatIntervalRef.current = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
+    }
+
+    console.log(`[Realtime] Event listening started (SSE=${sseStarted ? 'attempting' : 'failed'}, polling=active, heartbeat=active)`);
+  }, [startSSE, pollEvents, sendHeartbeat]);
+
+  const connect = useCallback(async () => {
+    if (sessionIdRef.current) {
+      // Session already exists (e.g. React Strict Mode second mount or preConnect completed)
+      console.log('[Realtime] Session already exists, restoring state:', sessionIdRef.current);
+      setIsConnected(true);
+
+      // Ensure event listening is active
+      if (!sseSourceRef.current && !pollIntervalRef.current) {
+        startEventListening(sessionIdRef.current);
+      }
+      return;
+    }
+
+    const sessionId = await createSession();
+    sessionIdRef.current = sessionId;
+    setIsConnected(true);
+    lastAudioSentTimeRef.current = Date.now();
+
+    startEventListening(sessionId);
+  }, [createSession, startEventListening]);
+
+  // PreConnect: create session in background, set up event listening + heartbeat,
+  // but don't start microphone. Call connect() later and it will see the existing session.
+  const preConnect = useCallback(async () => {
+    if (sessionIdRef.current) {
+      console.log('[Realtime] preConnect: session already exists:', sessionIdRef.current);
+      setIsConnected(true);
+      return;
+    }
+
+    console.log('[Realtime] preConnect: creating session in background...');
+    try {
+      const sessionId = await createSession();
+      sessionIdRef.current = sessionId;
+      lastAudioSentTimeRef.current = Date.now();
+
+      startEventListening(sessionId);
+
+      setIsConnected(true);
+      console.log('[Realtime] preConnect: session ready:', sessionId);
+    } catch (err) {
+      console.error('[Realtime] preConnect failed:', err);
+      // Don't throw — preConnect failure is non-fatal, connect() will retry
+    }
+  }, [createSession, startEventListening]);
 
   const disconnect = useCallback(async () => {
     // Set disconnecting flag first to prevent any new audio from being enqueued
@@ -578,6 +687,13 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
 
     // Clear playback immediately to stop any ongoing audio
     playback.clear();
+
+    // Close SSE
+    if (sseSourceRef.current) {
+      sseSourceRef.current.close();
+      sseSourceRef.current = null;
+      usingSSERef.current = false;
+    }
 
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current);
@@ -621,8 +737,6 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
   }, [playback]);
 
   const startListening = useCallback(async () => {
-    // Use ref instead of state to avoid stale closure when called
-    // from .then() chain after connect() (state hasn't re-rendered yet)
     if (!sessionIdRef.current) {
       console.error("Not connected (no session)");
       return;
@@ -639,7 +753,6 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
   }, []);
 
   const sendTextMessage = useCallback(async (text: string, options?: { silent?: boolean }) => {
-    // Use ref instead of state to avoid stale closure after connect() resolves
     if (!sessionIdRef.current) {
       console.error("Not connected (no session)");
       return;
@@ -661,23 +774,26 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
     });
   }, []);
 
-  // Restore poll/heartbeat intervals if they were cleared (e.g. by HMR cleanup)
+  // Restore event listeners if they were cleared (e.g. by HMR cleanup)
   // but the session is still alive
   useEffect(() => {
     if (isConnected && sessionIdRef.current) {
-      if (!pollIntervalRef.current) {
-        console.log('[Realtime] Restoring poll interval (lost during HMR/re-mount)');
-        pollIntervalRef.current = setInterval(pollEvents, 200);
+      if (!sseSourceRef.current && !pollIntervalRef.current) {
+        console.log('[Realtime] Restoring event listening (lost during HMR/re-mount)');
+        startEventListening(sessionIdRef.current);
       }
       if (!heartbeatIntervalRef.current) {
         console.log('[Realtime] Restoring heartbeat interval (lost during HMR/re-mount)');
         heartbeatIntervalRef.current = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
       }
     }
-  }, [isConnected, pollEvents, sendHeartbeat]);
+  }, [isConnected, startEventListening, sendHeartbeat]);
 
   useEffect(() => {
     return () => {
+      if (sseSourceRef.current) {
+        sseSourceRef.current.close();
+      }
       if (pollIntervalRef.current) {
         clearInterval(pollIntervalRef.current);
       }
@@ -692,6 +808,7 @@ export function useDoubaoRealtimeVoice(options: UseVoiceInteractionOptions): Use
     isListening,
     connect,
     disconnect,
+    preConnect,
     startListening,
     stopListening,
     sendTextMessage,

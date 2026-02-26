@@ -253,13 +253,34 @@ type QueuedEvent = {
   audioBase64?: string;
 };
 
+// SSE listener: a writable stream controller that receives server-sent events
+type SSEWriter = WritableStreamDefaultWriter<Uint8Array>;
+
 const sessions = new Map<string, {
   ws: WebSocketInstance;
   events: QueuedEvent[];
   error: string | null;
   closed: boolean;
   dialogId?: string;
+  sseWriters: Set<SSEWriter>;
 }>();
+
+// Push an event to all connected SSE clients. Returns true if any SSE client received it.
+function pushToSSE(session: { sseWriters: Set<SSEWriter>; events: QueuedEvent[] }, event: QueuedEvent): boolean {
+  if (session.sseWriters.size === 0) return false;
+  const encoder = new TextEncoder();
+  const data = JSON.stringify(event);
+  const message = encoder.encode(`data: ${data}\n\n`);
+  for (const writer of session.sseWriters) {
+    try {
+      writer.write(message);
+    } catch {
+      // Writer closed, will be cleaned up by the SSE handler
+      session.sseWriters.delete(writer);
+    }
+  }
+  return session.sseWriters.size > 0;
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -333,6 +354,71 @@ export async function POST(req: NextRequest) {
   }
 }
 
+// SSE endpoint: GET /api/voice/doubao-realtime?sessionId=xxx
+export async function GET(req: NextRequest) {
+  const sessionId = req.nextUrl.searchParams.get("sessionId");
+  if (!sessionId) {
+    return NextResponse.json({ error: "Missing sessionId" }, { status: 400 });
+  }
+
+  const session = sessions.get(sessionId);
+  if (!session) {
+    return NextResponse.json({ error: "Session not found" }, { status: 404 });
+  }
+
+  if (session.closed) {
+    return NextResponse.json({ error: "Session closed" }, { status: 410 });
+  }
+
+  const encoder = new TextEncoder();
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = writable.getWriter();
+
+  // Register this writer as an SSE listener
+  session.sseWriters.add(writer);
+  console.log(`[SSE] Client connected for session ${sessionId}, total listeners: ${session.sseWriters.size}`);
+
+  // Send any queued events immediately (drain the queue)
+  if (session.events.length > 0) {
+    const queued = session.events.splice(0, session.events.length);
+    for (const event of queued) {
+      const data = JSON.stringify(event);
+      writer.write(encoder.encode(`data: ${data}\n\n`));
+    }
+  }
+
+  // Send error if any
+  if (session.error) {
+    writer.write(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: session.error })}\n\n`));
+  }
+
+  // Heartbeat to keep connection alive (every 15s)
+  const heartbeat = setInterval(() => {
+    try {
+      writer.write(encoder.encode(`: heartbeat\n\n`));
+    } catch {
+      clearInterval(heartbeat);
+    }
+  }, 15000);
+
+  // Clean up when client disconnects
+  req.signal.addEventListener("abort", () => {
+    console.log(`[SSE] Client disconnected for session ${sessionId}`);
+    clearInterval(heartbeat);
+    session.sseWriters.delete(writer);
+    try { writer.close(); } catch { /* ignore */ }
+  });
+
+  return new Response(readable, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      "Connection": "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
+  });
+}
+
 interface ToolFunction {
   name: string;
   description: string;
@@ -392,6 +478,7 @@ async function createSession(config: {
       error: null as string | null,
       closed: false,
       dialogId: undefined as string | undefined,
+      sseWriters: new Set<SSEWriter>(),
     };
 
     const timeout = setTimeout(() => {
@@ -507,9 +594,13 @@ async function createSession(config: {
             queued.audioBase64 = parsed.audioData.toString("base64");
           }
 
-          session.events.push(queued);
-          if (session.events.length > MAX_QUEUE) {
-            session.events.shift();
+          // Push to SSE clients first; only queue if no SSE listeners
+          const pushedToSSE = pushToSSE(session, queued);
+          if (!pushedToSSE) {
+            session.events.push(queued);
+            if (session.events.length > MAX_QUEUE) {
+              session.events.shift();
+            }
           }
         }
       } catch (e) {
@@ -522,6 +613,18 @@ async function createSession(config: {
       console.error(`Realtime session ${sessionId} error:`, error.message);
       session.error = error.message;
       session.closed = true;
+
+      // Notify SSE clients of error
+      const encoder = new TextEncoder();
+      const errMsg = encoder.encode(`event: error\ndata: ${JSON.stringify({ error: error.message })}\n\n`);
+      for (const writer of session.sseWriters) {
+        try {
+          writer.write(errMsg);
+          writer.close();
+        } catch { /* ignore */ }
+      }
+      session.sseWriters.clear();
+
       // Return error immediately if not yet resolved
       resolve(NextResponse.json(
         { error: `WebSocket error: ${error.message}` },
@@ -532,6 +635,18 @@ async function createSession(config: {
     ws.on("close", (code: number, reason: Buffer) => {
       console.log(`Realtime session ${sessionId} closed:`, code, reason.toString());
       session.closed = true;
+
+      // Notify SSE clients that session is closed
+      const encoder = new TextEncoder();
+      const closeMsg = encoder.encode(`event: close\ndata: {"closed":true}\n\n`);
+      for (const writer of session.sseWriters) {
+        try {
+          writer.write(closeMsg);
+          writer.close();
+        } catch { /* ignore */ }
+      }
+      session.sseWriters.clear();
+
       // If closed before session started, return error
       if (!session.dialogId) {
         resolve(NextResponse.json(
